@@ -1,0 +1,67 @@
+# Madison RL Intelligence Agent — Full System Config
+# Use with: python -m src.train --config experiments/configs/full_system.yaml
+
+environment:
+  max_steps_per_episode: 20
+  n_source_pool: 50
+  query_embedding_dim: 384
+  n_query_types: 8
+  relevance_noise_std: 0.1
+  latency_mean: 0.5
+  latency_std: 0.2
+
+agents:
+  agents:
+    - name: search
+      role: "Information gathering via web and API queries"
+      tools: [web_scraper, api_client, academic_search]
+      memory_size: 100
+    - name: evaluator
+      role: "Source credibility assessment and quality scoring"
+      tools: [credibility_scorer, fact_checker]
+      memory_size: 50
+    - name: synthesis
+      role: "Combining findings into coherent summaries"
+      tools: [relevance_extractor, summarizer]
+      memory_size: 100
+    - name: deep_dive
+      role: "Follow-up investigation on under-covered subtopics"
+      tools: [web_scraper, api_client, relevance_extractor]
+      memory_size: 75
+
+ppo:
+  hidden_dim: 256
+  n_layers: 2
+  learning_rate: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  entropy_coeff: 0.01
+  value_loss_coeff: 0.5
+  max_grad_norm: 0.5
+  n_epochs: 4
+  batch_size: 64
+  rollout_length: 2048
+
+bandit:
+  alpha: 1.0
+  context_dim: 128
+  n_tools: 6
+  regularization: 1.0
+
+reward:
+  relevance_weight: 1.0
+  coverage_weight: 0.5
+  latency_penalty: 0.3
+  diversity_weight: 0.4
+  quality_weight: 0.6
+
+training:
+  n_episodes: 5000
+  eval_interval: 100
+  eval_episodes: 20
+  checkpoint_interval: 500
+  seed: 42
+  device: auto
+  log_dir: experiments/logs
+  checkpoint_dir: experiments/checkpoints
