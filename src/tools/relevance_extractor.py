@@ -22,7 +22,20 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-
+@dataclass
+class RelevanceExtractorConfig:
+    """
+    Configuration for the RelevanceExtractor tool.
+    All parameters are exposed for optimization and experimentation.
+    """
+    max_features: int = 5000          # TF-IDF vocabulary size
+    ngram_range: tuple = (1, 2)       # Unigrams + bigrams
+    min_passage_length: int = 20      # Skip very short passages
+    top_k: int = 5                    # Default passages to return
+    relevance_threshold: float = 0.0  # Minimum score to include passage
+    sublinear_tf: bool = True         # Log-normalize term frequency
+    stop_words: str = "english"       # Stop word removal language
+    
 @dataclass
 class Passage:
     """A single extracted passage with relevance metadata."""
@@ -46,25 +59,26 @@ class RelevanceExtractor:
     to focus on the most useful parts of retrieved documents.
     """
 
-    def __init__(
-        self,
-        max_features: int = 5000,
-        ngram_range: tuple = (1, 2),
-        min_passage_length: int = 20,
-    ) -> None:
+    def __init__(self, config: Optional[RelevanceExtractorConfig] = None) -> None:
         """
-        Args:
-            max_features: Max vocabulary size for TF-IDF
-            ngram_range: N-gram range (1,2) captures bigrams too
-            min_passage_length: Skip passages shorter than this (chars)
+        Initialize with optional config. Uses defaults if not provided.
+        
+        Example:
+            # Default config
+            extractor = RelevanceExtractor()
+            
+            # Custom config for academic text
+            config = RelevanceExtractorConfig(max_features=10000, ngram_range=(1,3))
+            extractor = RelevanceExtractor(config)
         """
+        self.config = config or RelevanceExtractorConfig()
         self.vectorizer = TfidfVectorizer(
-            max_features=max_features,
-            ngram_range=ngram_range,
-            stop_words="english",
-            sublinear_tf=True,  # Apply log normalization to TF
+            max_features=self.config.max_features,
+            ngram_range=self.config.ngram_range,
+            stop_words=self.config.stop_words,
+            sublinear_tf=self.config.sublinear_tf,
         )
-        self.min_passage_length = min_passage_length
+        self.min_passage_length = self.config.min_passage_length
         self.is_fitted = False
 
     def extract(
