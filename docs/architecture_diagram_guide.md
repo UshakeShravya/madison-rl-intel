@@ -1,0 +1,83 @@
+# Architecture Diagram (Visual Alternative)
+
+For a professional PDF report, consider creating this diagram using:
+
+**Tools**: Draw.io, Lucidchart, or PowerPoint
+
+## Diagram Layout
+
+```
+┌─────────────────────────────────────────────────┐
+│              Research Query                     │
+│  • Text + Subtopics + Budget Constraint        │
+└─────────────────┬───────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────┐
+│         PPO Meta-Controller                     │
+│  ┌─────────────────────────────────────────────┐ │
+│  │ Actor-Critic Network:                      │ │
+│  │ • 396D Input State                         │ │
+│  │ • 2×256 Hidden Layers                      │ │
+│  │ • 24 Action Output                         │ │
+│  │ • PPO Training (γ=0.99, ε=0.2)            │ │
+│  └─────────────────────────────────────────────┘ │
+└─────────────────┬───────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────┐
+│       Agent Execution Layer                     │
+│                                                 │
+│  ┌─────┐  ┌─────┐  ┌─────┐  ┌─────┐            │
+│  │Search│  │Eval │  │Synth│  │Deep │            │
+│  │Agent│  │Agent│  │Agent│  │Dive │            │
+│  └─────┘  └─────┘  └─────┘  └─────┘            │
+│     │        │        │        │                │
+│     ▼        ▼        ▼        ▼                │
+│  ┌─────────────────────────────────────────────┐ │
+│  │     Contextual Bandits (LinUCB)            │ │
+│  │  • Per-Agent Tool Selection                 │ │
+│  │  • 10D Context Features                     │ │
+│  │  • 6 Tools per Agent                        │ │
+│  │  • UCB Exploration (α=1.0)                 │ │
+│  └─────────────────────────────────────────────┘ │
+└─────────────────┬───────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────┐
+│       Research Environment                      │
+│  ┌─────────────────────────────────────────────┐ │
+│  │ Gym-Compatible Simulation                  │ │
+│  │ • 396D State Space                         │ │
+│  │ • 24D Action Space                         │ │
+│  │ • Multi-Component Rewards                  │ │
+│  │ • 50 Simulated Sources                     │ │
+│  └─────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────┘
+```
+
+## Visual Enhancement Tips
+
+1. **Color Coding**:
+   - Blue: PPO Controller
+   - Green: Agent Layer
+   - Orange: Bandit Layer
+   - Purple: Environment
+
+2. **Icons/Symbols**:
+   - 🔍 for Search Agent
+   - ✅ for Evaluator Agent
+   - 🔗 for Synthesis Agent
+   - 🔬 for Deep Dive Agent
+
+3. **Data Flow Arrows**:
+   - Solid arrows: Control flow
+   - Dashed arrows: Data flow
+   - Labeled arrows: Key information
+
+4. **Technical Annotations**:
+   - Include key parameters
+   - Show tensor dimensions
+   - Note algorithm names
+
+This visual diagram will look much more professional in your PDF report!
