@@ -21,30 +21,32 @@ from reportlab.platypus import (
 )
 
 # ── Page geometry ─────────────────────────────────────────────────────────────
-PW, PH     = LETTER
-MARGIN     = 0.85 * inch
-CONTENT_W  = PW - 2 * MARGIN
+PW, PH    = LETTER           # 612 x 792 points
+MARGIN    = 0.85 * inch
+CONTENT_W = PW - 2 * MARGIN  # ~468 pt
 
 # ── Colour palette ────────────────────────────────────────────────────────────
 DARK_BLUE  = HexColor('#1a2b4a')
 MID_BLUE   = HexColor('#2d4a7a')
 ACCENT     = HexColor('#3d6fa8')
 LIGHT_BLUE = HexColor('#e8eef6')
-CODE_BG    = HexColor('#f3f4f6')
-CODE_BDR   = HexColor('#d0d7de')
+CODE_BG    = HexColor('#f0f2f5')   # slightly darker for contrast
+CODE_BDR   = HexColor('#c8d0da')
 TH_BG      = HexColor('#2d4a7a')
 TR_ALT     = HexColor('#eef2f7')
 LIGHT_GRY  = HexColor('#777777')
 MID_GRY    = HexColor('#444444')
 
-# ── Unicode → safe-ASCII substitution table ───────────────────────────────────
-# ReportLab's built-in Helvetica / Courier are Latin-1; we map all non-Latin-1
-# characters to readable ASCII equivalents before rendering.
+# ── Unicode → safe ASCII substitution table ───────────────────────────────────
+# ReportLab built-in fonts (Helvetica / Courier) are Latin-1 only.
+# Every non-Latin-1 codepoint must be mapped here or it will render as a blank.
 _SUBS = str.maketrans({
     # Dashes / quotes
     '\u2014': '--',   '\u2013': '-',
     '\u2018': "'",    '\u2019': "'",
     '\u201c': '"',    '\u201d': '"',
+    '\u2026': '...',
+
     # Arithmetic / relational
     '\u00d7': 'x',    '\u2212': '-',
     '\u2265': '>=',   '\u2264': '<=',
@@ -52,44 +54,95 @@ _SUBS = str.maketrans({
     '\u221e': 'inf',  '\u221a': 'sqrt',
     '\u2211': 'Sum',  '\u2208': 'in',
     '\u22c5': '*',    '\u00b7': '.',
-    # Greek letters
-    '\u03b1': 'alpha',  '\u03b2': 'beta',   '\u03b3': 'gamma',
-    '\u03b4': 'delta',  '\u03b5': 'eps',    '\u03b8': 'theta',
-    '\u03bb': 'lambda', '\u03bc': 'mu',     '\u03c0': 'pi',
-    '\u03c3': 'sigma',  '\u03c4': 'tau',    '\u03a3': 'Sigma',
-    # Superscripts
-    '\u207b': '^-',  '\u00b9': '^1', '\u00b2': '^2', '\u00b3': '^3',
-    '\u2074': '^4',  '\u2075': '^5', '\u2076': '^6',
-    '\u2077': '^7',  '\u2078': '^8', '\u2079': '^9', '\u2070': '^0',
+    '\u2260': '!=',   '\u2261': '===',
+    '\u00f7': '/',    '\u00d7': 'x',
+    '\u2297': '(x)',  '\u2295': '(+)',
+
+    # Greek (lowercase)
+    '\u03b1': 'alpha',   '\u03b2': 'beta',    '\u03b3': 'gamma',
+    '\u03b4': 'delta',   '\u03b5': 'eps',     '\u03b6': 'zeta',
+    '\u03b7': 'eta',     '\u03b8': 'theta',   '\u03b9': 'iota',
+    '\u03ba': 'kappa',   '\u03bb': 'lambda',  '\u03bc': 'mu',
+    '\u03bd': 'nu',      '\u03be': 'xi',      '\u03c0': 'pi',
+    '\u03c1': 'rho',     '\u03c3': 'sigma',   '\u03c4': 'tau',
+    '\u03c5': 'upsilon', '\u03c6': 'phi',     '\u03c7': 'chi',
+    '\u03c8': 'psi',     '\u03c9': 'omega',
+    # Greek (uppercase)
+    '\u0393': 'Gamma',  '\u0394': 'Delta',   '\u0398': 'Theta',
+    '\u039b': 'Lambda', '\u039e': 'Xi',      '\u03a0': 'Pi',
+    '\u03a3': 'Sigma',  '\u03a6': 'Phi',     '\u03a8': 'Psi',
+    '\u03a9': 'Omega',
+
+    # Superscripts / subscripts
+    '\u207b': '^-', '\u207a': '^+',
+    '\u00b9': '^1', '\u00b2': '^2', '\u00b3': '^3',
+    '\u2074': '^4', '\u2075': '^5', '\u2076': '^6',
+    '\u2077': '^7', '\u2078': '^8', '\u2079': '^9', '\u2070': '^0',
+    '\u2080': '_0', '\u2081': '_1', '\u2082': '_2', '\u2083': '_3',
+
     # Arrows
-    '\u2192': '->',  '\u2190': '<-',  '\u21d2': '=>',
+    '\u2192': '->',  '\u2190': '<-',  '\u2194': '<->',
+    '\u21d2': '=>',  '\u21d0': '<=',  '\u21d4': '<=>',
+    '\u2191': '^',   '\u2193': 'v',
+    '\u21a6': '|->',
     '\u25b8': '>',   '\u25c2': '<',
-    # Math letters
-    '\u211d': 'R',
-    '\u00c2': 'A^',   # Â (A-hat in math)
-    '\u00ca': 'E^',   # Ê (E-hat / expectation)
-    # Box-drawing (used in ASCII diagrams inside code fences)
-    '\u2554': '+',  '\u2557': '+',  '\u255a': '+',  '\u255d': '+',
-    '\u2560': '+',  '\u2563': '+',  '\u2566': '+',  '\u2569': '+',  '\u256c': '+',
-    '\u2551': '|',  '\u2550': '=',
-    '\u250c': '+',  '\u2510': '+',  '\u2514': '+',  '\u2518': '+',
-    '\u251c': '+',  '\u2524': '+',  '\u252c': '+',  '\u2534': '+',  '\u253c': '+',
-    '\u2500': '-',  '\u2502': '|',
-    # Pointer / triangle symbols
+    '\u25b6': '>',   '\u25c0': '<',
+
+    # Math letters / symbols
+    '\u211d': 'R',   '\u2115': 'N',   '\u2124': 'Z',
+    '\u00c2': 'A^',  '\u00ca': 'E^',
+    '\u2202': 'd',   '\u222b': 'int', '\u220f': 'Prod',
+    '\u221d': 'prop',
+
+    # ── Box-drawing ─────────────────────────────────────────────────────────
+    # Double-line (used in ASCII architecture diagrams)
+    '\u2554': '+',  '\u2557': '+',   # ╔ ╗
+    '\u255a': '+',  '\u255d': '+',   # ╚ ╝
+    '\u2560': '+',  '\u2563': '+',   # ╠ ╣
+    '\u2566': '+',  '\u2569': '+',   # ╦ ╩
+    '\u256c': '+',                   # ╬
+    '\u2551': '|',  '\u2550': '=',   # ║ ═
+
+    # Single-line corners / junctions
+    '\u250c': '+',  '\u2510': '+',   # ┌ ┐
+    '\u2514': '+',  '\u2518': '+',   # └ ┘
+    '\u251c': '+',  '\u2524': '+',   # ├ ┤
+    '\u252c': '+',  '\u2534': '+',   # ┬ ┴
+    '\u253c': '+',                   # ┼
+    # Single-line strokes
+    '\u2500': '-',  '\u2502': '|',   # ─ │
+    # Heavy strokes
+    '\u2501': '=',  '\u2503': '|',   # ━ ┃
+    # Dashed
+    '\u2504': '-',  '\u2505': '-',
+    '\u2506': '|',  '\u2507': '|',
+    '\u254c': '-',  '\u254d': '=',
+    '\u254e': '|',  '\u254f': '|',
+
+    # Pointer / filled triangles
     '\u25bc': 'v',  '\u25b2': '^',
     '\u25c4': '<',  '\u25ba': '>',
-    # Circled numbers
-    '\u2460': '(1)', '\u2461': '(2)', '\u2462': '(3)', '\u2463': '(4)',
-    '\u2464': '(5)', '\u2465': '(6)', '\u2466': '(7)', '\u2467': '(8)',
-    '\u2468': '(9)',
-    # Bullets / misc
-    '\u2022': '*',
+    '\u25cf': '*',  '\u25cb': 'o',
+    '\u25a0': '#',  '\u25a1': '[]',
+
+    # Circled numbers ① – ⑨
+    '\u2460': '(1)', '\u2461': '(2)', '\u2462': '(3)',
+    '\u2463': '(4)', '\u2464': '(5)', '\u2465': '(6)',
+    '\u2466': '(7)', '\u2467': '(8)', '\u2468': '(9)',
+    '\u2469': '(10)',
+
+    # Misc
+    '\u2022': '*',   '\u2023': '>',
+    '\u00a0': ' ',   # non-breaking space
+    '\u200b': '',    # zero-width space
 })
 
 
 def clean(s: str) -> str:
-    """Apply Unicode → ASCII substitutions."""
-    return s.translate(_SUBS)
+    """Apply Unicode → ASCII substitutions, then drop any remaining non-Latin-1."""
+    s = s.translate(_SUBS)
+    # Final safety: encode to Latin-1, dropping anything still not representable
+    return s.encode('latin-1', errors='ignore').decode('latin-1')
 
 
 def xe(s: str) -> str:
@@ -107,11 +160,11 @@ def md_inline(text: str) -> str:
     text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
     # Italic
     text = re.sub(r'\*([^*\n]+?)\*', r'<i>\1</i>', text)
-    # Inline code  →  grey-background monospace
+    # Inline code → monospace
     text = re.sub(
         r'`([^`\n]+?)`',
         lambda m: (
-            f'<font name="Courier" size="8" color="#24292e">'
+            f'<font name="Courier" size="8.5" color="#24292e">'
             f'{xe(clean(m.group(1)))}</font>'
         ),
         text,
@@ -125,31 +178,35 @@ def _ps(name, **kw) -> ParagraphStyle:
 
 
 S = {
+    # H2 in markdown → major section title
     'h1': _ps('h1', fontName='Helvetica-Bold', fontSize=16,
-              textColor=DARK_BLUE, spaceBefore=22, spaceAfter=8, leading=20),
+              textColor=DARK_BLUE, spaceBefore=32, spaceAfter=8, leading=21),
+    # H3
     'h2': _ps('h2', fontName='Helvetica-Bold', fontSize=13,
-              textColor=MID_BLUE, spaceBefore=15, spaceAfter=5, leading=17),
+              textColor=MID_BLUE, spaceBefore=22, spaceAfter=6, leading=18),
+    # H4
     'h3': _ps('h3', fontName='Helvetica-BoldOblique', fontSize=11,
-              textColor=ACCENT, spaceBefore=11, spaceAfter=4, leading=15),
+              textColor=ACCENT, spaceBefore=16, spaceAfter=5, leading=15),
+    # H5
     'h4': _ps('h4', fontName='Helvetica-Bold', fontSize=10,
-              textColor=MID_GRY, spaceBefore=8, spaceAfter=3, leading=14),
+              textColor=MID_GRY, spaceBefore=12, spaceAfter=4, leading=14),
     'body': _ps('body', fontName='Helvetica', fontSize=10,
-                spaceBefore=3, spaceAfter=3, leading=15, alignment=TA_JUSTIFY),
+                spaceBefore=4, spaceAfter=4, leading=15.5, alignment=TA_JUSTIFY),
     'bullet': _ps('bullet', fontName='Helvetica', fontSize=10,
-                  spaceBefore=2, spaceAfter=2, leading=14,
-                  leftIndent=18, firstLineIndent=0),
+                  spaceBefore=2, spaceAfter=2, leading=14.5,
+                  leftIndent=20, firstLineIndent=0),
     'num': _ps('num', fontName='Helvetica', fontSize=10,
-               spaceBefore=2, spaceAfter=2, leading=14,
-               leftIndent=22, firstLineIndent=-12),
+               spaceBefore=2, spaceAfter=2, leading=14.5,
+               leftIndent=24, firstLineIndent=-14),
     'sub_bullet': _ps('sub_bullet', fontName='Helvetica', fontSize=9.5,
                       spaceBefore=1, spaceAfter=1, leading=13,
-                      leftIndent=36, firstLineIndent=0, textColor=MID_GRY),
+                      leftIndent=38, firstLineIndent=0, textColor=MID_GRY),
     'th': _ps('th', fontName='Helvetica-Bold', fontSize=9,
               textColor=white, alignment=TA_CENTER, leading=12),
     'td': _ps('td', fontName='Helvetica', fontSize=9,
-              alignment=TA_LEFT, leading=12),
+              alignment=TA_LEFT, leading=13),
     'td_ctr': _ps('td_ctr', fontName='Helvetica', fontSize=9,
-                  alignment=TA_CENTER, leading=12),
+                  alignment=TA_CENTER, leading=13),
     'footer': _ps('footer', fontName='Helvetica', fontSize=8,
                   textColor=LIGHT_GRY, alignment=TA_CENTER),
 }
@@ -157,55 +214,70 @@ S = {
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def make_code_block(lines: list[str], font_size: float = 7.0) -> list:
+def _col_widths(n_cols: int, header_row: list[str]) -> list[float]:
+    """
+    Return column widths that sum to CONTENT_W.
+    For 2-col tables the first column is usually a label → 35/65 split.
+    For 3-col, heuristic 25/37.5/37.5.
+    Otherwise equal.
+    """
+    if n_cols == 2:
+        return [CONTENT_W * 0.35, CONTENT_W * 0.65]
+    if n_cols == 3:
+        return [CONTENT_W * 0.25, CONTENT_W * 0.375, CONTENT_W * 0.375]
+    if n_cols == 4:
+        return [CONTENT_W * 0.22, CONTENT_W * 0.26, CONTENT_W * 0.26, CONTENT_W * 0.26]
+    return [CONTENT_W / n_cols] * n_cols
+
+
+def make_code_block(lines: list[str], font_size: float = 7.5) -> list:
     """Render a fenced code block with grey background and border.
 
     Returns a list of Table flowables — long blocks are split into
     page-sized chunks so ReportLab never hits LayoutError.
     """
-    # Usable frame height = page height minus top/bottom margins
-    _frame_h = PH - MARGIN - (MARGIN + 0.15 * inch)
-    _padding  = 20  # top + bottom cell padding in points
-    _leading  = font_size * 1.38
-    # Leave a 10-line safety margin so the last chunk fits comfortably
-    _max_lines = max(30, int((_frame_h - _padding) / _leading) - 10)
+    # Usable frame height = page height minus margins
+    _frame_h  = PH - MARGIN - (MARGIN + 0.15 * inch)
+    _v_pad    = 28   # top (14) + bottom (14) cell padding
+    _leading  = font_size * 1.4
+    # Safety margin of 8 lines so the last chunk fits with room to spare
+    _max_lines = max(30, int((_frame_h - _v_pad) / _leading) - 8)
 
     results: list = []
-    for start in range(0, max(1, len(lines)), _max_lines):
-        chunk = lines[start:start + _max_lines]
-        text  = '\n'.join(clean(line) for line in chunk)
+    chunks = [lines[s:s + _max_lines]
+              for s in range(0, max(1, len(lines)), _max_lines)]
+    for chunk in chunks:
+        text = '\n'.join(clean(line) for line in chunk)
         pre_style = ParagraphStyle(
             'pre', fontName='Courier', fontSize=font_size,
-            leading=_leading, textColor=HexColor('#24292e'),
+            leading=_leading, textColor=HexColor('#1e2126'),
         )
         pre = Preformatted(text, pre_style)
         tbl = Table([[pre]], colWidths=[CONTENT_W])
         tbl.setStyle(TableStyle([
             ('BACKGROUND',    (0, 0), (-1, -1), CODE_BG),
-            ('BOX',           (0, 0), (-1, -1), 0.6, CODE_BDR),
-            ('TOPPADDING',    (0, 0), (-1, -1), 7),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
-            ('LEFTPADDING',   (0, 0), (-1, -1), 10),
-            ('RIGHTPADDING',  (0, 0), (-1, -1), 10),
+            ('BOX',           (0, 0), (-1, -1), 0.8, CODE_BDR),
+            ('TOPPADDING',    (0, 0), (-1, -1), 14),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 14),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 16),
+            ('RIGHTPADDING',  (0, 0), (-1, -1), 12),
         ]))
         results.append(tbl)
     return results
 
 
 def make_table(rows: list[list[str]]) -> Table | None:
-    """Build a styled Table. First row is the header."""
+    """Build a styled markdown table.  First row is treated as the header."""
     if not rows:
         return None
     n_cols = max(len(r) for r in rows)
     if n_cols == 0:
         return None
 
-    # Heuristic column widths: equal split
-    col_w = CONTENT_W / n_cols
+    col_widths = _col_widths(n_cols, rows[0])
 
     data = []
     for i, row in enumerate(rows):
-        # Pad short rows
         padded = list(row) + [''] * (n_cols - len(row))
         if i == 0:
             cells = [Paragraph(md_inline(c.strip()), S['th']) for c in padded]
@@ -213,21 +285,21 @@ def make_table(rows: list[list[str]]) -> Table | None:
             cells = [Paragraph(md_inline(c.strip()), S['td']) for c in padded]
         data.append(cells)
 
-    tbl = Table(data, colWidths=[col_w] * n_cols, repeatRows=1)
+    tbl = Table(data, colWidths=col_widths, repeatRows=1)
     tbl.setStyle(TableStyle([
-        ('BACKGROUND',    (0, 0), (-1,  0), TH_BG),
-        ('TEXTCOLOR',     (0, 0), (-1,  0), white),
-        ('FONTNAME',      (0, 0), (-1,  0), 'Helvetica-Bold'),
-        ('FONTSIZE',      (0, 0), (-1,  0), 9),
-        ('FONTNAME',      (0, 1), (-1, -1), 'Helvetica'),
-        ('FONTSIZE',      (0, 1), (-1, -1), 9),
+        ('BACKGROUND',     (0, 0), (-1,  0), TH_BG),
+        ('TEXTCOLOR',      (0, 0), (-1,  0), white),
+        ('FONTNAME',       (0, 0), (-1,  0), 'Helvetica-Bold'),
+        ('FONTSIZE',       (0, 0), (-1,  0), 9),
+        ('FONTNAME',       (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE',       (0, 1), (-1, -1), 9),
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [white, TR_ALT]),
-        ('GRID',          (0, 0), (-1, -1), 0.5, HexColor('#c0c8d8')),
-        ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING',    (0, 0), (-1, -1), 5),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-        ('LEFTPADDING',   (0, 0), (-1, -1), 8),
-        ('RIGHTPADDING',  (0, 0), (-1, -1), 8),
+        ('GRID',           (0, 0), (-1, -1), 0.5, HexColor('#c0c8d8')),
+        ('VALIGN',         (0, 0), (-1, -1), 'TOP'),
+        ('TOPPADDING',     (0, 0), (-1, -1), 7),
+        ('BOTTOMPADDING',  (0, 0), (-1, -1), 7),
+        ('LEFTPADDING',    (0, 0), (-1, -1), 10),
+        ('RIGHTPADDING',   (0, 0), (-1, -1), 10),
     ]))
     return tbl
 
@@ -235,13 +307,13 @@ def make_table(rows: list[list[str]]) -> Table | None:
 def section_rule() -> HRFlowable:
     return HRFlowable(width='100%', thickness=0.5,
                       color=HexColor('#c8d1dc'),
-                      spaceAfter=4, spaceBefore=4)
+                      spaceAfter=6, spaceBefore=6)
 
 
 # ── Markdown parser ───────────────────────────────────────────────────────────
 
 def parse_md(md: str) -> list:
-    """Convert markdown string to a list of ReportLab flowables."""
+    """Convert a markdown string to a list of ReportLab flowables."""
     flowables: list = []
     lines = md.split('\n')
     i = 0
@@ -252,7 +324,9 @@ def parse_md(md: str) -> list:
 
         # ── Horizontal rule ──────────────────────────────────────────────────
         if re.match(r'^-{3,}$', line) or re.match(r'^\*{3,}$', line):
+            flowables.append(Spacer(1, 6))
             flowables.append(section_rule())
+            flowables.append(Spacer(1, 4))
             i += 1
             continue
 
@@ -266,15 +340,18 @@ def parse_md(md: str) -> list:
             i += 1  # consume closing fence
             if code_lines:
                 max_len = max((len(l) for l in code_lines), default=0)
-                # Choose font size so longest line fits inside content width
-                # Courier at pt: approx 0.6 * font_size pts per char
-                fs = 7.5
-                if max_len > 88:
-                    fs = 6.5
-                if max_len > 106:
+                # Pick font size so the widest line fits within CONTENT_W.
+                # Courier character width ≈ 0.6 * fontSize points.
+                fs = 8.0
+                if max_len > 80:
+                    fs = 7.0
+                if max_len > 96:
+                    fs = 6.0
+                if max_len > 116:
                     fs = 5.5
-                # make_code_block returns a list (may be split across pages)
+                flowables.append(Spacer(1, 6))
                 flowables.extend(make_code_block(code_lines, fs))
+                flowables.append(Spacer(1, 8))
             continue
 
         # ── Markdown table ───────────────────────────────────────────────────
@@ -283,16 +360,15 @@ def parse_md(md: str) -> list:
             while i < len(lines) and lines[i].strip().startswith('|'):
                 row_line = lines[i].strip()
                 cells = [c for c in row_line.split('|')[1:-1]]
-                # Skip separator rows (|---|---|)
                 if not all(re.match(r'^[-:| ]+$', c) for c in cells):
                     table_rows.append(cells)
                 i += 1
             if table_rows:
                 tbl = make_table(table_rows)
                 if tbl:
-                    flowables.append(Spacer(1, 4))
+                    flowables.append(Spacer(1, 8))
                     flowables.append(tbl)
-                    flowables.append(Spacer(1, 6))
+                    flowables.append(Spacer(1, 10))
             continue
 
         # ── ATX Headers ──────────────────────────────────────────────────────
@@ -300,21 +376,24 @@ def parse_md(md: str) -> list:
         if m:
             level = len(m.group(1))
             text  = md_inline(m.group(2))
-            style_map = {2: 'h1', 3: 'h2', 4: 'h3', 5: 'h4'}
-            skey = style_map.get(level, 'h4')
 
             if level == 1:
-                # Document title — already on title page, render as h1 here
+                # Document title already on title page; render as h1 in body
+                flowables.append(Spacer(1, 8))
                 flowables.append(Paragraph(text, S['h1']))
             elif level == 2:
-                # Major section — add decorative rule below
-                flowables.append(Spacer(1, 6))
+                # Major section — accent underline
+                flowables.append(Spacer(1, 14))
                 flowables.append(Paragraph(text, S['h1']))
                 flowables.append(HRFlowable(
-                    width='100%', thickness=1.5, color=ACCENT,
-                    spaceAfter=6, spaceBefore=2))
+                    width='100%', thickness=2.0, color=ACCENT,
+                    spaceAfter=8, spaceBefore=3))
+            elif level == 3:
+                flowables.append(Paragraph(text, S['h2']))
+            elif level == 4:
+                flowables.append(Paragraph(text, S['h3']))
             else:
-                flowables.append(Paragraph(text, S[skey]))
+                flowables.append(Paragraph(text, S['h4']))
             i += 1
             continue
 
@@ -329,25 +408,23 @@ def parse_md(md: str) -> list:
             continue
 
         # ── Bullet list item ─────────────────────────────────────────────────
-        m = re.match(r'^[-*]\s+(.+)$', line)
+        m = re.match(r'^[-*+]\s+(.+)$', line)
         if m:
-            text = md_inline(m.group(1))
-            # Detect sub-bullets (indented 2+ spaces in the raw line)
+            text   = md_inline(m.group(1))
             indent = len(raw) - len(raw.lstrip())
-            style = S['sub_bullet'] if indent >= 4 else S['bullet']
-            bullet_char = '&#x2022;' if indent < 4 else '&#x25e6;'
-            flowables.append(Paragraph(f'{bullet_char}&nbsp;{text}', style))
+            style  = S['sub_bullet'] if indent >= 4 else S['bullet']
+            bchar  = '&#x2022;' if indent < 4 else '&#x25e6;'
+            flowables.append(Paragraph(f'{bchar}&nbsp;&nbsp;{text}', style))
             i += 1
             continue
 
         # ── Blank line ────────────────────────────────────────────────────────
         if not line:
-            flowables.append(Spacer(1, 4))
+            flowables.append(Spacer(1, 5))
             i += 1
             continue
 
         # ── Body paragraph ────────────────────────────────────────────────────
-        # Collect wrapped continuation lines (stop at structural elements)
         para_lines = [line]
         i += 1
         while i < len(lines):
@@ -356,7 +433,7 @@ def parse_md(md: str) -> list:
                     or nxt.startswith('#')
                     or nxt.startswith('```')
                     or nxt.startswith('|')
-                    or re.match(r'^[-*]\s+', nxt)
+                    or re.match(r'^[-*+]\s+', nxt)
                     or re.match(r'^\d+\.\s+', nxt)
                     or re.match(r'^-{3,}$', nxt)):
                 break
@@ -371,97 +448,99 @@ def parse_md(md: str) -> list:
     return flowables
 
 
-# ── Page footer ───────────────────────────────────────────────────────────────
+# ── Page template: footer + top rule ─────────────────────────────────────────
 
 def _on_page(canvas, doc):
     canvas.saveState()
-    canvas.setFont('Helvetica', 7.5)
+
+    # Footer bar
+    canvas.setFont('Helvetica', 8)
     canvas.setFillColor(LIGHT_GRY)
-    txt = (
-        f'Madison RL Intelligence Agent \u2014 Technical Report'
-        f'\u2003|\u2003Page {doc.page}'
+    footer_y = 0.45 * inch
+    canvas.drawCentredString(
+        PW / 2, footer_y,
+        f'Madison RL Intelligence Agent  --  Technical Report  |  Page {doc.page}',
     )
-    # Replace the em-dash and whitespace since we're drawing directly
-    txt = txt.replace('\u2014', '--').replace('\u2003', '   ')
-    canvas.drawCentredString(PW / 2, 0.45 * inch, txt)
-    # Top header rule (pages > 1)
+
+    # Thin footer rule above the text
+    canvas.setStrokeColor(HexColor('#dde3ec'))
+    canvas.setLineWidth(0.5)
+    canvas.line(MARGIN, footer_y + 12, PW - MARGIN, footer_y + 12)
+
+    # Top rule on every page except the title page
     if doc.page > 1:
-        canvas.setStrokeColor(HexColor('#dde3ec'))
-        canvas.setLineWidth(0.5)
-        canvas.line(MARGIN, PH - MARGIN + 8, PW - MARGIN, PH - MARGIN + 8)
+        canvas.line(MARGIN, PH - MARGIN + 6, PW - MARGIN, PH - MARGIN + 6)
+
     canvas.restoreState()
 
 
-# ── Title page builder ────────────────────────────────────────────────────────
+# ── Title page ────────────────────────────────────────────────────────────────
 
 def build_title_page() -> list:
     story = []
     story.append(Spacer(1, 0.9 * inch))
 
-    # ── Main title banner ────────────────────────────────────────────────────
-    banner_data = [[
+    # Main title banner
+    banner = Table([[
         Paragraph(
             '<font size="22" color="#ffffff"><b>Madison RL Intelligence Agent</b></font>',
             _ps('banner', fontName='Helvetica-Bold', fontSize=22,
                 textColor=white, alignment=TA_CENTER, leading=28),
         )
-    ]]
-    banner = Table(banner_data, colWidths=[CONTENT_W])
+    ]], colWidths=[CONTENT_W])
     banner.setStyle(TableStyle([
         ('BACKGROUND',    (0, 0), (-1, -1), DARK_BLUE),
-        ('TOPPADDING',    (0, 0), (-1, -1), 18),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 18),
-        ('LEFTPADDING',   (0, 0), (-1, -1), 20),
-        ('RIGHTPADDING',  (0, 0), (-1, -1), 20),
+        ('TOPPADDING',    (0, 0), (-1, -1), 22),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 22),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 24),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 24),
     ]))
     story.append(banner)
 
-    # ── Subtitle strip ───────────────────────────────────────────────────────
-    sub_data = [[
+    # Subtitle strip
+    sub_tbl = Table([[
         Paragraph(
             'Technical Report',
             _ps('sub', fontName='Helvetica-Bold', fontSize=15,
                 textColor=MID_BLUE, alignment=TA_CENTER, leading=20),
         )
-    ]]
-    sub_tbl = Table(sub_data, colWidths=[CONTENT_W])
+    ]], colWidths=[CONTENT_W])
     sub_tbl.setStyle(TableStyle([
         ('BACKGROUND',    (0, 0), (-1, -1), LIGHT_BLUE),
-        ('TOPPADDING',    (0, 0), (-1, -1), 10),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+        ('TOPPADDING',    (0, 0), (-1, -1), 11),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 11),
     ]))
     story.append(sub_tbl)
-    story.append(Spacer(1, 0.22 * inch))
+    story.append(Spacer(1, 0.25 * inch))
 
-    # ── Description lines ────────────────────────────────────────────────────
     desc_style = _ps('desc', fontName='Helvetica', fontSize=10,
                      textColor=MID_GRY, alignment=TA_CENTER, leading=16)
     story.append(Paragraph(
         'Hierarchical Reinforcement Learning for Multi-Agent Research Orchestration',
         desc_style,
     ))
-    story.append(Spacer(1, 4))
+    story.append(Spacer(1, 5))
     story.append(Paragraph(
         'PPO Meta-Controller  |  LinUCB Contextual Bandits  |  '
         'Transfer Learning  |  Novelty Bonus  |  Real Agent Execution',
         _ps('desc2', fontName='Helvetica-Oblique', fontSize=9,
             textColor=LIGHT_GRY, alignment=TA_CENTER, leading=14),
     ))
-    story.append(Spacer(1, 0.22 * inch))
-    story.append(HRFlowable(width='55%', thickness=1.2, color=ACCENT,
+    story.append(Spacer(1, 0.25 * inch))
+    story.append(HRFlowable(width='55%', thickness=1.5, color=ACCENT,
                              hAlign='CENTER', spaceAfter=0))
-    story.append(Spacer(1, 0.22 * inch))
+    story.append(Spacer(1, 0.25 * inch))
 
-    # ── Key results table ────────────────────────────────────────────────────
+    # Key results table (2 columns → 35/65 split)
     kr_rows = [
         ['Metric', 'Result'],
         ['Full System vs Random Baseline', '+291.3%  (27.48 vs 7.02 mean reward)'],
-        ['Full System vs Heuristic', '+156.0%'],
-        ['Few-Shot Transfer (K=1)', '+12.3% over from-scratch training'],
-        ['Early Adaptation (ep 1-10)', '+17.6% advantage vs from-scratch'],
+        ['Full System vs Heuristic',        '+156.0%'],
+        ['Few-Shot Transfer (K=1)',          '+12.3% over from-scratch training'],
+        ['Early Adaptation (ep 1-10)',       '+17.6% advantage vs from-scratch'],
         ['Full System wins tight-budget env', '13.26 vs 12.78 (PPO Only)'],
-        ['Experiments', '500 episodes x 3 seeds x 5 configurations'],
-        ['Code & Data', 'github.com/UshakeShravya/madison-rl-intel'],
+        ['Experiments',                      '500 episodes x 3 seeds x 5 configurations'],
+        ['Code & Data',                      'github.com/UshakeShravya/madison-rl-intel'],
     ]
     kr_tbl = make_table(kr_rows)
     if kr_tbl:
@@ -471,7 +550,7 @@ def build_title_page() -> list:
     return story
 
 
-# ── Main build function ───────────────────────────────────────────────────────
+# ── Main build ────────────────────────────────────────────────────────────────
 
 def build_pdf(output: str = 'docs/technical_report.pdf') -> None:
     repo = Path(__file__).parent.parent  # project root
@@ -479,53 +558,45 @@ def build_pdf(output: str = 'docs/technical_report.pdf') -> None:
     report_md  = (repo / 'docs' / 'technical_report.md').read_text(encoding='utf-8')
     diagram_md = (repo / 'docs' / 'architecture_diagram.md').read_text(encoding='utf-8')
 
-    # ── Merge documents ───────────────────────────────────────────────────────
-    # Strip the H1 title from architecture_diagram.md (it's already a section)
+    # Strip the H1 title from architecture_diagram.md
     diag_lines = diagram_md.split('\n')
     if diag_lines and diag_lines[0].startswith('# '):
         diag_lines = diag_lines[1:]
     diag_body = '\n'.join(diag_lines).lstrip('\n')
 
-    # Insert the architecture diagram as a new section right after
-    # "## System Architecture" block (before "## Mathematical Formulation").
-    insert_after  = '## Mathematical Formulation'
-    arch_section  = (
+    # Insert architecture section before "## Mathematical Formulation"
+    insert_after = '## Mathematical Formulation'
+    arch_section = (
         '\n\n---\n\n'
         '## Architecture Diagrams\n\n'
         + diag_body
         + '\n\n---\n\n'
     )
 
-    if insert_after in report_md:
-        combined_md = report_md.replace(
-            insert_after,
-            arch_section + insert_after,
-            1,
-        )
-    else:
-        combined_md = report_md + arch_section
+    combined_md = (
+        report_md.replace(insert_after, arch_section + insert_after, 1)
+        if insert_after in report_md
+        else report_md + arch_section
+    )
 
-    # ── Strip the document H1 (rendered on the title page instead) ───────────
-    lines = combined_md.split('\n')
-    body_start = 0
-    for idx, l in enumerate(lines):
-        if l.startswith('## '):
-            body_start = idx
-            break
-    body_md = '\n'.join(lines[body_start:])
+    # Drop the document H1 (already on title page)
+    md_lines    = combined_md.split('\n')
+    body_start  = next(
+        (idx for idx, l in enumerate(md_lines) if l.startswith('## ')), 0
+    )
+    body_md = '\n'.join(md_lines[body_start:])
 
-    # ── Build ReportLab story ─────────────────────────────────────────────────
+    # Build story
     story: list = []
     story.extend(build_title_page())
     story.extend(parse_md(body_md))
 
-    # ── Compile PDF ───────────────────────────────────────────────────────────
     out_path = str(repo / output) if not Path(output).is_absolute() else output
     doc = SimpleDocTemplate(
         out_path,
         pagesize=LETTER,
         leftMargin=MARGIN, rightMargin=MARGIN,
-        topMargin=MARGIN, bottomMargin=MARGIN + 0.15 * inch,
+        topMargin=MARGIN,  bottomMargin=MARGIN + 0.2 * inch,
         title='Madison RL Intelligence Agent: Technical Report',
         author='UshakeShravya',
         subject='Hierarchical RL for Multi-Agent Research Orchestration',
@@ -533,7 +604,6 @@ def build_pdf(output: str = 'docs/technical_report.pdf') -> None:
     )
     doc.build(story, onFirstPage=_on_page, onLaterPages=_on_page)
     print(f'PDF written -> {out_path}')
-    print(f'Pages: check output')
 
 
 if __name__ == '__main__':
