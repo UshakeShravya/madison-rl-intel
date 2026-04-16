@@ -107,14 +107,16 @@ class TestEnvironment:
 # ──────────────────────────────────────────────
 class TestPPO:
     def test_ppo_init(self):
-        ppo = PPOController(obs_dim=396, n_actions=24, config=PPOConfig())
+        # PPO now controls only agent selection (4 actions), not joint (agent, tool)
+        ppo = PPOController(obs_dim=396, n_actions=4, config=PPOConfig())
         assert ppo.total_updates == 0
 
     def test_ppo_select_action(self):
-        ppo = PPOController(obs_dim=396, n_actions=24, config=PPOConfig())
+        # Returned action is an agent index in {0, 1, 2, 3}
+        ppo = PPOController(obs_dim=396, n_actions=4, config=PPOConfig())
         obs = np.random.randn(396).astype(np.float32)
         action, log_prob, value = ppo.select_action(obs)
-        assert 0 <= action < 24
+        assert 0 <= action < 4
         assert isinstance(log_prob, float)
         assert isinstance(value, float)
 

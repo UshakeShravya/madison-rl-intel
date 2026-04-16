@@ -86,15 +86,15 @@ def evaluate_policy(
         done = False
 
         while not done:
-            action, _, _ = ppo.select_action(obs)
-            agent_idx = action // env.n_tools
+            # ppo has 4 actions; the returned value IS the agent index directly
+            agent_idx, _, _ = ppo.select_action(obs)
             agent_name = env.AGENTS[agent_idx].value
             context = obs[:config.bandit.context_dim]
             tool_arm, tool_name = bandits.select_tool(agent_name, context)
             if tool_name in tool_names_list:
                 tool_idx = tool_names_list.index(tool_name)
             else:
-                tool_idx = action % env.n_tools
+                tool_idx = 0
             final_action = agent_idx * env.n_tools + tool_idx
             obs, reward, term, trunc, _ = env.step(final_action)
             done = term or trunc
@@ -135,10 +135,11 @@ def finetune_policy(
     bandits = MultiAgentBanditManager(config.bandit, AGENT_TOOLS)
     tool_names_list = [t.value for t in env.TOOLS]
 
-    # Deep-copy so the caller's checkpoint is untouched
+    # Deep-copy so the caller's checkpoint is untouched.
+    # Use env.n_agents (4) — architecture must match source_ppo.
     ft_ppo = PPOController(
         obs_dim=env.observation_space.shape[0],
-        n_actions=env.action_space.n,
+        n_actions=env.n_agents,
         config=config.ppo,
     )
     ft_ppo.network.load_state_dict(copy.deepcopy(source_ppo.network.state_dict()))
@@ -152,19 +153,20 @@ def finetune_policy(
         done = False
 
         while not done:
-            action, log_prob, value = ft_ppo.select_action(obs)
-            agent_idx = action // env.n_tools
+            # 4-action PPO: returned value is agent_idx directly
+            agent_idx, log_prob, value = ft_ppo.select_action(obs)
             agent_name = env.AGENTS[agent_idx].value
             context = obs[:config.bandit.context_dim]
             tool_arm, tool_name = bandits.select_tool(agent_name, context)
             if tool_name in tool_names_list:
                 tool_idx = tool_names_list.index(tool_name)
             else:
-                tool_idx = action % env.n_tools
+                tool_idx = 0
             final_action = agent_idx * env.n_tools + tool_idx
             next_obs, reward, term, trunc, _ = env.step(final_action)
             done = term or trunc
-            ft_ppo.store_transition(obs, final_action, reward, done, log_prob, value)
+            # Store agent_idx (0-3) — keeps importance ratio correct
+            ft_ppo.store_transition(obs, agent_idx, reward, done, log_prob, value)
             bandits.update(agent_name, tool_arm, context, reward)
             episode_reward += reward
             obs = next_obs
@@ -199,7 +201,7 @@ def train_from_scratch(
 
     ppo = PPOController(
         obs_dim=env.observation_space.shape[0],
-        n_actions=env.action_space.n,
+        n_actions=env.n_agents,  # 4-action agent selector
         config=config.ppo,
     )
 
@@ -210,19 +212,18 @@ def train_from_scratch(
         done = False
 
         while not done:
-            action, log_prob, value = ppo.select_action(obs)
-            agent_idx = action // env.n_tools
+            agent_idx, log_prob, value = ppo.select_action(obs)
             agent_name = env.AGENTS[agent_idx].value
             context = obs[:config.bandit.context_dim]
             tool_arm, tool_name = bandits.select_tool(agent_name, context)
             if tool_name in tool_names_list:
                 tool_idx = tool_names_list.index(tool_name)
             else:
-                tool_idx = action % env.n_tools
+                tool_idx = 0
             final_action = agent_idx * env.n_tools + tool_idx
             next_obs, reward, term, trunc, _ = env.step(final_action)
             done = term or trunc
-            ppo.store_transition(obs, final_action, reward, done, log_prob, value)
+            ppo.store_transition(obs, agent_idx, reward, done, log_prob, value)
             bandits.update(agent_name, tool_arm, context, reward)
             episode_reward += reward
             obs = next_obs

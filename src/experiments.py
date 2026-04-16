@@ -15,6 +15,7 @@ Configurations tested:
 
 from __future__ import annotations
 
+import argparse
 import json
 import time
 from pathlib import Path
@@ -149,11 +150,17 @@ def run_bandit_only(
 def run_full_system(
     env: ResearchEnv, n_episodes: int, ppo_config: PPOConfig, bandit_config: BanditConfig
 ) -> List[float]:
-    """Full system: PPO + bandits."""
+    """Full system: PPO selects agent (4 actions), bandit selects tool (6 per agent).
+
+    Separation is key: PPO owns WHO works, the bandit owns WHAT tool they use.
+    Their optimisation problems are orthogonal, so they cooperate rather than
+    compete. PPO's importance ratio is computed over the 4-agent space, which
+    is what its network actually sampled — the stored action is agent_idx (0-3).
+    """
     obs_dim = env.observation_space.shape[0]
-    n_actions = env.action_space.n
-    ppo = PPOController(obs_dim, n_actions, ppo_config)
+    ppo = PPOController(obs_dim, env.n_agents, ppo_config)  # 4-action agent selector
     bandits = MultiAgentBanditManager(bandit_config, AGENT_TOOLS)
+    tool_names_list = [t.value for t in env.TOOLS]
 
     rewards = []
     for ep in range(n_episodes):
@@ -161,25 +168,22 @@ def run_full_system(
         episode_reward = 0.0
         done = False
         while not done:
-            action, log_prob, value = ppo.select_action(obs)
-
-            agent_idx = action // env.n_tools
+            agent_idx, log_prob, value = ppo.select_action(obs)
             agent_name = env.AGENTS[agent_idx].value
 
             context = obs[:bandit_config.context_dim]
             tool_arm, tool_name = bandits.select_tool(agent_name, context)
 
-            tool_names_list = [t.value for t in env.TOOLS]
             if tool_name in tool_names_list:
                 tool_idx = tool_names_list.index(tool_name)
             else:
-                tool_idx = action % env.n_tools
+                tool_idx = 0
             final_action = agent_idx * env.n_tools + tool_idx
 
             next_obs, reward, term, trunc, _ = env.step(final_action)
             done = term or trunc
 
-            ppo.store_transition(obs, final_action, reward, done, log_prob, value)
+            ppo.store_transition(obs, agent_idx, reward, done, log_prob, value)
             bandits.update(agent_name, tool_arm, context, reward)
             episode_reward += reward
             obs = next_obs
@@ -202,16 +206,25 @@ def run_all_experiments(
     n_episodes: int = 500,
     n_seeds: int = 3,
     output_dir: str = "experiments/logs",
+    env_config=None,
+    reward_config=None,
 ) -> None:
     """
     Run all five configurations with multiple seeds.
 
     This produces the comparative analysis needed for the report.
+    Pass env_config / reward_config to run with a non-default environment.
     """
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
     config = MadisonConfig()
+    # Allow callers (e.g. CLI with --env) to override the env/reward configs
+    if env_config is not None:
+        config.environment = env_config
+    if reward_config is not None:
+        config.reward = reward_config
+
     all_results = {}
 
     experiments = {
@@ -354,7 +367,66 @@ def _plot_final_performance(
     logger.info("Final performance plot saved")
 
 
+ENV_PRESETS = {
+    "default": {
+        "description": "Standard environment (default config)",
+        "overrides": {},
+    },
+    "tight_budget": {
+        "description": "Higher latency → budget exhausted faster; fewer steps allowed",
+        "overrides": {
+            "latency_mean": 1.0,   # double default (0.5) — each step costs more
+            "latency_std": 0.3,    # more variance in cost
+            "max_steps_per_episode": 12,  # 60% of default 20
+        },
+    },
+    "complex_queries": {
+        "description": "Higher relevance noise + smaller source pool → harder retrieval",
+        "overrides": {
+            "relevance_noise_std": 0.25,  # 2.5× default (0.1)
+            "n_source_pool": 20,          # 40% of default 50
+        },
+    },
+}
+
+
 if __name__ == "__main__":
     from src.utils.logging import setup_logging
+
+    parser = argparse.ArgumentParser(
+        description="Run Madison RL comparative experiments."
+    )
+    parser.add_argument(
+        "--env",
+        choices=list(ENV_PRESETS.keys()),
+        default="default",
+        help="Environment variant to run (default: default)",
+    )
+    parser.add_argument("--episodes", type=int, default=500)
+    parser.add_argument("--seeds", type=int, default=3)
+    args = parser.parse_args()
+
     setup_logging()
-    run_all_experiments(n_episodes=500, n_seeds=3)
+
+    preset = ENV_PRESETS[args.env]
+    logger.info("Environment preset: {} — {}", args.env, preset["description"])
+
+    # Build config and apply env overrides
+    config = MadisonConfig()
+    for key, val in preset["overrides"].items():
+        setattr(config.environment, key, val)
+        logger.info("  env.{} = {}", key, val)
+
+    # Output to a subdirectory named after the preset
+    if args.env == "default":
+        output_dir = "experiments/logs"
+    else:
+        output_dir = f"experiments/logs/{args.env}"
+
+    run_all_experiments(
+        n_episodes=args.episodes,
+        n_seeds=args.seeds,
+        output_dir=output_dir,
+        env_config=config.environment,
+        reward_config=config.reward,
+    )

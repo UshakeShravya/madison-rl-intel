@@ -40,10 +40,12 @@ class Trainer:
         # Environment
         self.env = ResearchEnv(config.environment, config.reward)
 
-        # PPO controller (RL Method 1)
+        # PPO controller (RL Method 1) — selects WHICH AGENT to activate (4 choices).
+        # The bandit independently selects WHICH TOOL to use (up to 6 per agent).
+        # Keeping the two decisions separate lets each optimizer focus on its own
+        # problem without their gradients interfering with each other.
         obs_dim = self.env.observation_space.shape[0]
-        n_actions = self.env.action_space.n
-        self.ppo = PPOController(obs_dim, n_actions, config.ppo)
+        self.ppo = PPOController(obs_dim, self.env.n_agents, config.ppo)
 
         # Bandit manager (RL Method 2)
         agent_tools = {
@@ -140,26 +142,22 @@ class Trainer:
 
         done = False
         while not done:
-            # PPO selects action (agent + tool combo)
-            action, log_prob, value = self.ppo.select_action(obs)
-
-            # Decode which agent was chosen
-            agent_idx = action // self.env.n_tools
+            # PPO selects WHICH AGENT to activate (action ∈ {0,1,2,3})
+            agent_idx, log_prob, value = self.ppo.select_action(obs)
             agent_name = self.env.AGENTS[agent_idx].value
 
-            # Bandit refines tool selection for this agent
+            # Bandit selects WHICH TOOL for that agent (separate 6-action space)
             bandit_context = obs[:self.config.bandit.context_dim]
             tool_arm, tool_name = self.bandits.select_tool(
                 agent_name, bandit_context
             )
 
-            # Re-encode action with bandit's tool choice
-            # Map tool_name back to environment tool index
+            # Compose the full environment action from the two cooperative decisions
             tool_names_list = [t.value for t in self.env.TOOLS]
             if tool_name in tool_names_list:
                 tool_idx = tool_names_list.index(tool_name)
             else:
-                tool_idx = action % self.env.n_tools
+                tool_idx = 0
             final_action = agent_idx * self.env.n_tools + tool_idx
 
             # Step environment
@@ -168,10 +166,12 @@ class Trainer:
             )
             done = terminated or truncated
 
-            # Store experience for PPO
+            # Store agent_idx (0-3) — NOT final_action (0-23).
+            # PPO's importance ratio is over the 4-agent space, so the stored
+            # action must match what the network actually sampled.
             if training:
                 self.ppo.store_transition(
-                    obs, final_action, reward, done, log_prob, value
+                    obs, agent_idx, reward, done, log_prob, value
                 )
 
                 # Update bandit with reward

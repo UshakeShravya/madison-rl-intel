@@ -93,14 +93,15 @@ def train_on_domain(
     obs, _ = env.reset()
 
     obs_dim = env.observation_space.shape[0]
-    n_actions = env.action_space.n
 
     if existing_ppo is not None:
         ppo = existing_ppo
     else:
-        ppo = PPOController(obs_dim, n_actions, config.ppo)
+        # PPO selects WHICH AGENT (4 actions); bandit selects WHICH TOOL separately.
+        ppo = PPOController(obs_dim, env.n_agents, config.ppo)
 
     bandits = MultiAgentBanditManager(config.bandit, AGENT_TOOLS)
+    tool_names_list = [t.value for t in env.TOOLS]
 
     rewards = []
     for ep in range(n_episodes):
@@ -109,25 +110,23 @@ def train_on_domain(
         done = False
 
         while not done:
-            action, log_prob, value = ppo.select_action(obs)
-
-            agent_idx = action // env.n_tools
+            agent_idx, log_prob, value = ppo.select_action(obs)
             agent_name = env.AGENTS[agent_idx].value
 
             context = obs[:config.bandit.context_dim]
             tool_arm, tool_name = bandits.select_tool(agent_name, context)
 
-            tool_names_list = [t.value for t in env.TOOLS]
             if tool_name in tool_names_list:
                 tool_idx = tool_names_list.index(tool_name)
             else:
-                tool_idx = action % env.n_tools
+                tool_idx = 0
             final_action = agent_idx * env.n_tools + tool_idx
 
             next_obs, reward, term, trunc, _ = env.step(final_action)
             done = term or trunc
 
-            ppo.store_transition(obs, final_action, reward, done, log_prob, value)
+            # Store agent_idx (0-3) so PPO's importance ratio is correct.
+            ppo.store_transition(obs, agent_idx, reward, done, log_prob, value)
             bandits.update(agent_name, tool_arm, context, reward)
             episode_reward += reward
             obs = next_obs
@@ -189,15 +188,18 @@ def run_transfer_experiment(
         # ── Condition 2: Transfer — fine-tune source model on target ──
         logger.info("  Fine-tuning on {} ({} episodes)...",
                      target_domain.value, target_episodes)
-        # Deep copy the trained PPO so we don't modify the original
-        import torch
+        # Deep-copy the pre-trained 4-action PPO so source checkpoint is unchanged.
+        # Bug 2 fix: use 0.3× LR so the fine-tuning update steps are small enough
+        # that the pre-trained agent-selection priors are not overwritten.
+        _tmp_env = DomainSpecificEnv(target_domain, config.environment, config.reward)
         transfer_ppo = PPOController(
-            obs_dim=396, n_actions=24, config=config.ppo
+            obs_dim=_tmp_env.observation_space.shape[0],
+            n_actions=_tmp_env.n_agents,  # must match source_ppo (4 actions)
+            config=config.ppo,
         )
         transfer_ppo.network.load_state_dict(
             copy.deepcopy(source_ppo.network.state_dict())
         )
-        # Lower learning rate for fine-tuning
         for param_group in transfer_ppo.optimizer.param_groups:
             param_group['lr'] = config.ppo.learning_rate * 0.3
 
@@ -210,27 +212,27 @@ def run_transfer_experiment(
         # ── Condition 3: No fine-tuning — use source model directly ──
         logger.info("  Evaluating source model on {} (no fine-tuning)...",
                      target_domain.value)
-        env = DomainSpecificEnv(target_domain, config.environment, config.reward)
-        bandits = MultiAgentBanditManager(config.bandit, AGENT_TOOLS)
+        env_noft = DomainSpecificEnv(target_domain, config.environment, config.reward)
+        bandits_noft = MultiAgentBanditManager(config.bandit, AGENT_TOOLS)
+        tool_names_list_noft = [t.value for t in env_noft.TOOLS]
         no_ft_rewards = []
 
         for _ in range(target_episodes):
-            obs, _ = env.reset()
+            obs, _ = env_noft.reset()
             ep_reward = 0.0
             done = False
             while not done:
-                action, _, _ = source_ppo.select_action(obs)
-                agent_idx = action // env.n_tools
-                agent_name = env.AGENTS[agent_idx].value
+                # source_ppo is a 4-action network; action IS the agent index
+                agent_idx, _, _ = source_ppo.select_action(obs)
+                agent_name = env_noft.AGENTS[agent_idx].value
                 context = obs[:config.bandit.context_dim]
-                tool_arm, tool_name = bandits.select_tool(agent_name, context)
-                tool_names_list = [t.value for t in env.TOOLS]
-                if tool_name in tool_names_list:
-                    tool_idx = tool_names_list.index(tool_name)
+                tool_arm, tool_name = bandits_noft.select_tool(agent_name, context)
+                if tool_name in tool_names_list_noft:
+                    tool_idx = tool_names_list_noft.index(tool_name)
                 else:
-                    tool_idx = action % env.n_tools
-                final_action = agent_idx * env.n_tools + tool_idx
-                obs, reward, term, trunc, _ = env.step(final_action)
+                    tool_idx = 0
+                final_action = agent_idx * env_noft.n_tools + tool_idx
+                obs, reward, term, trunc, _ = env_noft.step(final_action)
                 done = term or trunc
                 ep_reward += reward
             no_ft_rewards.append(ep_reward)
