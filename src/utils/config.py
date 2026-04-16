@@ -91,6 +91,10 @@ class BanditConfig(BaseModel):
     context_dim: int = Field(128, description="Dimension of context vector for bandits")
     n_tools: int = Field(6, description="Number of available tools (arms)")
     regularization: float = Field(1.0, description="Ridge regression regularization")
+    # Intrinsic motivation (novelty bonus)
+    novelty_beta: float = Field(0.1, description="Novelty bonus scale (0 to disable)")
+    novelty_n_bits: int = Field(8, description="Random-projection bits for context bucketing")
+    novelty_seed: int = Field(0, description="Seed for the novelty projection matrix")
 
 
 # ──────────────────────────────────────────────

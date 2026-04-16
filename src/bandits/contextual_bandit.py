@@ -9,17 +9,94 @@ LinUCB maintains a confidence bound for each arm (tool).
 It picks the arm with the highest upper confidence bound,
 naturally balancing exploration vs exploitation.
 
-Reference: Li et al., "A Contextual-Bandit Approach to
-Personalized News Article Recommendation" (2010)
+Intrinsic motivation (novelty bonus) is layered on top of LinUCB:
+  novelty(arm, ctx) = beta / sqrt(visit_count(arm, ctx_bucket) + 1)
+
+This encourages the agent to explore (arm, context) pairs it has
+rarely visited, decaying naturally as experience accumulates.
+The context is bucketed via random projection so similar contexts
+map to the same bucket without an exact-match requirement.
+
+References:
+  - Li et al., "A Contextual-Bandit Approach to Personalized News
+    Article Recommendation" (2010)
+  - Bellemare et al., "Unifying Count-Based Exploration and Intrinsic
+    Motivation" (2016)
 """
 
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 from src.utils.config import BanditConfig
+
+
+class NoveltyTracker:
+    """
+    Count-based intrinsic motivation via random-projection hashing.
+
+    How it works:
+      1. Project the d-dimensional context down to n_bits binary codes
+         using a fixed random matrix (each bit = sign of a dot product).
+      2. Hash (arm_index, binary_code) to get a bucket.
+      3. The novelty bonus for that bucket is  beta / sqrt(count + 1).
+         - High when the bucket is rarely visited (count small).
+         - Decays toward zero as the bucket accumulates visits.
+
+    The random projection preserves approximate cosine similarity
+    (Johnson-Lindenstrauss), so similar contexts land in the same bucket
+    even though we never compute exact nearest neighbours.
+
+    Args:
+        context_dim: Dimensionality of the context vectors.
+        n_bits: Number of projection bits (bucket resolution).
+                More bits → finer buckets, slower generalisation.
+        beta: Novelty bonus scale. Larger values encourage more exploration.
+        seed: RNG seed for the projection matrix (fixed for reproducibility).
+    """
+
+    def __init__(
+        self,
+        context_dim: int,
+        n_bits: int = 8,
+        beta: float = 0.1,
+        seed: int = 0,
+    ) -> None:
+        self.beta = beta
+        rng = np.random.default_rng(seed)
+        # Fixed projection matrix: (n_bits, context_dim)
+        self._proj = rng.standard_normal((n_bits, context_dim))
+        # Visit counts: (arm_idx, bucket_int) -> int
+        self._counts: Dict[Tuple[int, int], int] = defaultdict(int)
+
+    def _bucket(self, arm: int, context: np.ndarray) -> Tuple[int, int]:
+        """Map (arm, context) to a discrete bucket key."""
+        bits = (self._proj @ context) >= 0  # shape: (n_bits,)
+        # Pack bits into a single integer
+        bucket_int = int(np.packbits(bits, bitorder="big")[0])
+        return (arm, bucket_int)
+
+    def bonus(self, arm: int, context: np.ndarray) -> float:
+        """Return the novelty bonus for this (arm, context) pair."""
+        key = self._bucket(arm, context)
+        count = self._counts[key]
+        return self.beta / np.sqrt(count + 1)
+
+    def update(self, arm: int, context: np.ndarray) -> None:
+        """Increment the visit counter after selecting this arm."""
+        key = self._bucket(arm, context)
+        self._counts[key] += 1
+
+    def get_total_visits(self) -> int:
+        """Total number of (arm, context) visits recorded."""
+        return sum(self._counts.values())
+
+    def get_unique_buckets(self) -> int:
+        """Number of distinct (arm, context-bucket) pairs seen."""
+        return len(self._counts)
 
 
 class LinUCBArm:
@@ -78,10 +155,19 @@ class LinUCBArm:
 
 class ContextualBandit:
     """
-    LinUCB contextual bandit for tool selection.
+    LinUCB contextual bandit for tool selection with intrinsic motivation.
 
     One bandit per agent — each learns which tools work best
     for that agent's role given the current research context.
+
+    Selection score for arm i:
+        score_i = UCB_i(context) + novelty_bonus_i(context)
+
+    The novelty bonus (via NoveltyTracker) decays as the arm-context
+    combination is visited more often, so exploration is driven toward
+    genuinely under-explored regions of the context space.
+    Set config.novelty_beta = 0 to disable novelty and fall back to
+    plain LinUCB.
     """
 
     def __init__(self, config: BanditConfig, tool_names: List[str]) -> None:
@@ -95,50 +181,78 @@ class ContextualBandit:
             for _ in range(self.n_arms)
         ]
 
+        # Intrinsic motivation — shared across all arms so visit counts
+        # are comparable (arm index is part of the bucket key)
+        self.novelty = NoveltyTracker(
+            context_dim=config.context_dim,
+            n_bits=config.novelty_n_bits,
+            beta=config.novelty_beta,
+            seed=config.novelty_seed,
+        )
+
         # Tracking
         self.total_pulls = 0
         self.arm_pulls = np.zeros(self.n_arms, dtype=int)
         self.arm_rewards = np.zeros(self.n_arms, dtype=float)
+        self.novelty_bonuses = np.zeros(self.n_arms, dtype=float)  # running sum for stats
 
     def select_arm(self, context: np.ndarray) -> int:
         """
         Select the best tool given current context.
 
-        Computes UCB for each arm and picks the highest.
+        Computes UCB + novelty bonus for each arm and picks the highest.
         Ties are broken randomly.
+
+        Returns:
+            Index of the chosen arm.
         """
-        # Ensure context has right dimension
         context = self._prepare_context(context)
 
         ucb_values = np.array([
             arm.get_ucb(context, self.config.alpha) for arm in self.arms
         ])
+        bonus_values = np.array([
+            self.novelty.bonus(i, context) for i in range(self.n_arms)
+        ])
+        scores = ucb_values + bonus_values
 
         # Break ties randomly
-        max_ucb = ucb_values.max()
-        max_arms = np.where(np.abs(ucb_values - max_ucb) < 1e-10)[0]
-        chosen = np.random.choice(max_arms)
+        max_score = scores.max()
+        max_arms = np.where(np.abs(scores - max_score) < 1e-10)[0]
+        chosen = int(np.random.choice(max_arms))
 
-        return int(chosen)
+        return chosen
 
     def update(self, arm: int, context: np.ndarray, reward: float) -> None:
-        """Update the chosen arm with observed reward."""
+        """Update the chosen arm with observed reward and novelty counter."""
         context = self._prepare_context(context)
+
+        # Update LinUCB model
         self.arms[arm].update(context, reward)
+
+        # Record novelty bonus *before* incrementing (what the agent saw)
+        bonus = self.novelty.bonus(arm, context)
+        self.novelty_bonuses[arm] += bonus
+
+        # Increment novelty visit counter
+        self.novelty.update(arm, context)
 
         self.total_pulls += 1
         self.arm_pulls[arm] += 1
         self.arm_rewards[arm] += reward
 
     def get_stats(self) -> Dict[str, float]:
-        """Get statistics about arm usage and performance."""
-        stats = {}
+        """Get statistics about arm usage, performance, and novelty."""
+        stats: Dict[str, float] = {}
         for i, name in enumerate(self.tool_names):
             pulls = self.arm_pulls[i]
             avg_reward = self.arm_rewards[i] / max(pulls, 1)
+            avg_novelty = self.novelty_bonuses[i] / max(pulls, 1)
             stats[f"{name}_pulls"] = int(pulls)
             stats[f"{name}_avg_reward"] = float(avg_reward)
+            stats[f"{name}_avg_novelty_bonus"] = float(avg_novelty)
         stats["total_pulls"] = int(self.total_pulls)
+        stats["novelty_unique_buckets"] = int(self.novelty.get_unique_buckets())
         return stats
 
     def _prepare_context(self, context: np.ndarray) -> np.ndarray:
