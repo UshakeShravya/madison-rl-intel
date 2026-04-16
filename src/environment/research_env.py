@@ -28,6 +28,7 @@ from src.utils.data_structures import (
     ToolName,
 )
 from src.rewards.reward_engine import RewardEngine
+from src.agents.base_agent import SearchAgent, EvaluatorAgent, SynthesisAgent, DeepDiveAgent
 
 
 class ResearchEnv(gym.Env):
@@ -109,6 +110,14 @@ class ResearchEnv(gym.Env):
         # Source pool — simulated sources with pre-assigned quality
         self.source_pool: list = []
 
+        # Agent instances — one per role, share the same SharedMemory
+        self._agents = {
+            AgentRole.SEARCH: SearchAgent(),
+            AgentRole.EVALUATOR: EvaluatorAgent(),
+            AgentRole.SYNTHESIS: SynthesisAgent(),
+            AgentRole.DEEP_DIVE: DeepDiveAgent(),
+        }
+
     def reset(
         self, *, seed: Optional[int] = None, options: Optional[Dict] = None
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
@@ -139,6 +148,10 @@ class ResearchEnv(gym.Env):
         # Generate source pool for this episode
         self._generate_source_pool()
 
+        # Reset agent state (step counters, avoided domains, etc.)
+        for agent in self._agents.values():
+            agent.reset()
+
         obs = self._get_observation()
         info = {"query_type": query_type.value, "n_subtopics": n_subtopics}
 
@@ -157,55 +170,71 @@ class ResearchEnv(gym.Env):
         # Decode action
         agent_idx = action // self.n_tools
         tool_idx = action % self.n_tools
-        agent = self.AGENTS[agent_idx]
+        agent_role = self.AGENTS[agent_idx]
         tool = self.TOOLS[tool_idx]
+        agent_instance = self._agents[agent_role]
 
         # Check compatibility — incompatible pairs get a penalty
-        compatible = tool in self.AGENT_TOOL_COMPATIBILITY.get(agent, [])
+        compatible = tool in self.AGENT_TOOL_COMPATIBILITY.get(agent_role, [])
 
-        # Simulate tool execution
+        # Simulate latency
         latency = max(0.1, self.rng.normal(
             self.env_config.latency_mean,
             self.env_config.latency_std,
         ))
 
+        # Call real agent logic — the agent reads shared memory, performs its
+        # role-specific analysis (coverage gaps, credibility scoring, synthesis,
+        # contradiction detection) and broadcasts messages to other agents.
+        agent_result = agent_instance.process(self.memory, tool)
+
         if compatible:
-            # Get base relevance from tool-query affinity
+            # Base relevance from tool-query affinity (the simulation's ground truth
+            # for how effective this tool class is on this query type)
             base_affinity = self.TOOL_QUERY_AFFINITY.get(
                 self.current_query.query_type, {}
             ).get(tool, 0.3)
 
-            # Add noise
+            # Agent confidence reflects execution quality given current memory state.
+            # e.g. SynthesisAgent has low confidence early (nothing to synthesize yet),
+            # EvaluatorAgent confidence tracks actual avg source quality in memory.
+            agent_confidence = agent_result.get("confidence", 0.5)
+
+            # Blend tool capability with agent's state-aware execution quality
             relevance = np.clip(
-                base_affinity + self.rng.normal(0, self.env_config.relevance_noise_std),
+                0.6 * base_affinity
+                + 0.4 * agent_confidence
+                + self.rng.normal(0, self.env_config.relevance_noise_std),
                 0.0, 1.0,
             )
 
-            # Pick a random source from pool and "retrieve" it
-            source = self._retrieve_source(agent, tool, relevance)
+            # Use agent's analysis to target the right subtopic rather than
+            # picking randomly (SearchAgent / DeepDiveAgent identify coverage gaps)
+            subtopic = self._get_target_subtopic(agent_role, agent_result)
 
-            # Create a finding for a random subtopic
-            subtopic = self.rng.choice(self.current_query.subtopics)
+            source = self._retrieve_source(agent_role, tool, relevance)
             finding = Finding(
-                content=f"Finding from {agent.value} using {tool.value}",
+                content=f"{agent_result.get('action', 'research')} by {agent_role.value} using {tool.value}",
                 sources=[source],
                 confidence=relevance,
                 subtopic=subtopic,
-                agent=agent,
+                agent=agent_role,
             )
             self.memory.add_finding(finding)
             self.memory.add_source(source)
         else:
-            # Incompatible agent-tool pair — low relevance, wasted effort
+            # Incompatible agent-tool pair — agent still reasons and broadcasts
+            # messages (coordination still happens), but the wrong tool means
+            # the retrieval quality is degraded
             relevance = 0.05
-            latency *= 1.5  # Takes longer when using wrong tool
+            latency *= 1.5
 
         # Update budget
         cost = latency * (1.0 if compatible else 1.5)
         self.memory.budget_used += cost
         self.memory.step_count += 1
 
-        # Compute reward
+        # Compute reward — same reward engine, now fed with real agent outputs
         reward_components = self.reward_engine.compute_step_reward(
             self.memory, relevance, latency
         )
@@ -226,7 +255,7 @@ class ResearchEnv(gym.Env):
 
         obs = self._get_observation()
         info = {
-            "agent": agent.value,
+            "agent": agent_role.value,
             "tool": tool.value,
             "compatible": compatible,
             "relevance": relevance,
@@ -235,6 +264,7 @@ class ResearchEnv(gym.Env):
             "coverage": self.memory.get_coverage_score(),
             "diversity": self.memory.get_source_diversity(),
             "budget_used": self.memory.budget_used,
+            "agent_action": agent_result.get("action", "unknown"),
         }
 
         return obs, reward, terminated, truncated, info
@@ -281,6 +311,21 @@ class ResearchEnv(gym.Env):
                 recency_score=self.rng.uniform(0.1, 1.0),
             ))
 
+    def _get_target_subtopic(self, agent_role: AgentRole, agent_result: Dict) -> str:
+        """Use the agent's analysis to pick which subtopic the finding addresses.
+
+        SearchAgent and DeepDiveAgent explicitly identify coverage gaps.
+        EvaluatorAgent and SynthesisAgent don't have a subtopic target, so
+        we fall back to the least-covered subtopic.
+        """
+        target = agent_result.get("target_subtopic")
+        if target and target != "general" and target in self.current_query.subtopics:
+            return target
+        # Fall back to least-covered subtopic
+        if self.memory.coverage_map:
+            return min(self.memory.coverage_map.items(), key=lambda x: x[1])[0]
+        return str(self.rng.choice(self.current_query.subtopics))
+
     def _retrieve_source(
         self, agent: AgentRole, tool: ToolName, relevance: float
     ) -> Source:
@@ -292,13 +337,15 @@ class ResearchEnv(gym.Env):
         idx = self.rng.choice(len(self.source_pool), p=weights)
         source = self.source_pool[idx]
 
-        # Create a copy with updated metadata
+        # credibility_score starts at 0.0 so EvaluatorAgent can assess it.
+        # The evaluator uses source.domain and source.recency_score (both copied
+        # from the pool) to compute a real credibility score when it next runs.
         return Source(
             url=source.url,
             title=source.title,
             content=source.content,
             domain=source.domain,
-            credibility_score=source.credibility_score,
+            credibility_score=0.0,
             relevance_score=relevance,
             recency_score=source.recency_score,
             retrieved_by=agent,

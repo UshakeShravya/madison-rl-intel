@@ -267,7 +267,7 @@ class SynthesisAgent(BaseAgent):
             "action": "synthesize",
             "topics_covered": len(by_topic),
             "synthesizable_topics": len(synthesizable),
-            "contradictions_found": len(contradictions),
+            "contradictions_found": contradictions,  # list so DeepDiveAgent can iterate
             "quality_sources_used": len(good_sources),
             "confidence": min(1.0, len(synthesizable) * 0.2),
         }
