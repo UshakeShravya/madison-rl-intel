@@ -400,10 +400,15 @@ with tab3:
         if report.sources:
             st.subheader("📚 Sources Retrieved")
             src_df = pd.DataFrame(report.sources)
-            src_df = src_df.sort_values("credibility", ascending=False)
-            st.dataframe(
-                src_df[["title","domain","source_type","credibility"]],
-                use_container_width=True, hide_index=True,
+            src_df = src_df.drop_duplicates(subset=["title","domain"]).sort_values("credibility", ascending=False)
+            # Make URLs clickable
+            src_df["url"] = src_df["url"].apply(
+                lambda u: f'<a href="{u}" target="_blank">🔗 link</a>' if u else ""
+            )
+            st.write(
+                src_df[["title","domain","source_type","credibility","url"]]
+                .to_html(escape=False, index=False),
+                unsafe_allow_html=True,
             )
 
             col1, col2 = st.columns(2)

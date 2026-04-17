@@ -202,11 +202,12 @@ class LiveResearchSession:
         obs       = self._initial_obs(query)
         budget    = _MAX_BUDGET
         sources   = []       # List[ToolResult]
-        all_text  = []       # collected content strings (for passage extraction)
-        subtopics = self._extract_subtopics(query)
-        coverage  = {t: 0.0 for t in subtopics}
-        step      = 0
-        done      = False
+        all_text   = []       # collected content strings (for passage extraction)
+        seen_urls  = set()    # deduplication — skip sources already retrieved
+        subtopics  = self._extract_subtopics(query)
+        coverage   = {t: 0.0 for t in subtopics}
+        step       = 0
+        done       = False
 
         if verbose:
             print(f"\n[Madison RL] Live research: '{query}'  ({query_type})")
@@ -230,8 +231,11 @@ class LiveResearchSession:
             latency = time.time() - t0
             budget -= latency * (1.0 if compatible else 1.5)
 
-            # ── Update state ──────────────────────────────────────────────────
-            if compatible and result.content:
+            # ── Update state (deduplicate by URL) ────────────────────────────
+            url_key = result.url or f"{result.domain}:{result.title}"
+            already_seen = url_key in seen_urls and result.source_type not in ("extracted", "assessment")
+            if compatible and result.content and not already_seen:
+                seen_urls.add(url_key)
                 sources.append(result)
                 all_text.append(result.content)
                 coverage = self._update_coverage(
