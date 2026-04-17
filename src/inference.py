@@ -148,7 +148,8 @@ class LiveResearchSession:
         cfg = MadisonConfig()
         obs_dim = 396  # 384 query_emb + 8 coverage + 4 scalars (matches training)
 
-        self._ppo = PPOController(obs_dim, _N_AGENTS * _N_TOOLS, cfg.ppo)
+        # PPO only selects the agent (4 actions); the bandit selects the tool
+        self._ppo = PPOController(obs_dim, _N_AGENTS, cfg.ppo)
 
         # Find checkpoint
         ckpt = self._ckpt
@@ -213,9 +214,9 @@ class LiveResearchSession:
             print(f"{'─'*70}")
 
         while not done and step < max_steps and budget > 0:
-            # ── Agent selection: PPO ─────────────────────────────────────────
+            # ── Agent selection: PPO (action is already agent_idx 0-3) ─────────
             action, _, _ = self._ppo.select_action(obs)
-            agent_idx    = action // _N_TOOLS      # PPO's agent choice
+            agent_idx    = int(action) % _N_AGENTS
             agent_name   = _AGENTS[agent_idx]
 
             # ── Tool selection: contextual bandit ─────────────────────────────
