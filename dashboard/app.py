@@ -283,133 +283,163 @@ with tab2:
 
 # ── TAB 3: REAL API DEMO ──
 with tab3:
-    st.header("🌐 Live Demo — Real Research (Wikipedia + Semantic Scholar)")
+    st.header("🌐 Live Demo — RL Policy + Real APIs")
     st.info(
-        "Type any real research question. The system queries Wikipedia and "
-        "Semantic Scholar, then uses the trained RL policy to evaluate and rank sources."
+        "The trained **PPO meta-controller** selects which agent to activate. "
+        "The **contextual bandit** selects the real API tool to call. "
+        "Real sources (Wikipedia, arXiv, OpenAlex) are retrieved, semantically "
+        "ranked by the **SemanticRelevanceExtractor**, and assembled into a research report."
     )
 
-    query = st.text_input(
-        "Research query:",
-        placeholder="e.g. What are the latest advances in quantum computing?",
-    )
+    col_q, col_t = st.columns([3, 1])
+    with col_q:
+        query = st.text_input(
+            "Research query:",
+            placeholder="e.g. What are the latest advances in quantum computing?",
+        )
+    with col_t:
+        query_type_live = st.selectbox("Query type", [
+            "exploratory", "technical", "factual", "comparative",
+            "temporal", "causal", "opinion", "quantitative",
+        ], key="live_qt")
 
-    col1, col2 = st.columns([2, 1])
+    col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
-        run_real = st.button("🔍 Run Real Research", type="primary")
+        run_real = st.button("🔍 Run RL-Directed Research", type="primary")
     with col2:
-        show_raw = st.checkbox("Show raw API responses")
+        n_steps = st.slider("Max steps", 4, 12, 8, key="live_steps")
+    with col3:
+        show_raw = st.checkbox("Show raw API JSON")
 
     if run_real and query:
-        from src.tools.real_apis import RealResearchEngine
-        from src.tools.relevance_extractor import RelevanceExtractor
+        from src.inference import LiveResearchSession
 
-        with st.spinner("Querying real sources — Wikipedia, Semantic Scholar, DuckDuckGo..."):
-            engine = RealResearchEngine()
-            results = engine.research(query)
+        session = LiveResearchSession()
+        progress_bar = st.progress(0, text="Initialising RL policy...")
 
-        st.subheader("Research Results")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Sources Found", results["total_sources"])
-        c2.metric("Domains Covered", len(results["domains"]))
-        c3.metric("APIs Queried", len(results["timeline"]))
-        c4.metric("Query", query[:30] + "..." if len(query) > 30 else query)
+        step_placeholder = st.empty()
+        step_rows = []
 
-        # API timeline
-        st.subheader("API Performance")
-        tl_df = pd.DataFrame(results["timeline"])
-        if not tl_df.empty:
-            fig = go.Figure(go.Bar(
-                x=tl_df["api"], y=tl_df["time"],
-                marker_color=["#3B8BD4", "#1D9E75", "#E8593C"],
-                text=[f"{r} results" for r in tl_df["results"]],
-                textposition="auto",
-            ))
-            fig.update_layout(title="Response Time per API (seconds)",
-                              yaxis_title="Time (s)", height=300)
-            st.plotly_chart(fig, use_container_width=True)
+        # Patch research() to stream step updates into Streamlit
+        original_research = session.research
 
-        # Wikipedia summary
-        if results.get("wiki_summary"):
-            st.subheader("📖 Wikipedia Summary")
-            st.info(results["wiki_summary"][:600] + "..." if len(results["wiki_summary"]) > 600
-                    else results["wiki_summary"])
+        def _streaming_research(q, qt, ms, verbose):
+            report = original_research(q, query_type=qt, max_steps=ms, verbose=False)
+            return report
 
-        # Use RelevanceExtractor on real content
-        if results["sources"]:
-            st.subheader("🔍 Relevance-Ranked Sources (Custom Tool)")
-            extractor = RelevanceExtractor()
+        with st.spinner("RL policy directing real API calls..."):
+            report = session.research(
+                query, query_type=query_type_live,
+                max_steps=n_steps, verbose=False,
+            )
+        progress_bar.progress(1.0, text="Done!")
 
-            source_data = []
-            for s in results["sources"]:
-                source_data.append({
-                    "Title": s.title[:70],
-                    "Type": s.source_type,
-                    "Domain": s.domain,
-                    "Relevance": round(s.relevance_score, 3),
-                    "Credibility": round(s.credibility_score, 3),
-                    "Combined Score": round(s.relevance_score * 0.5 + s.credibility_score * 0.5, 3),
-                    "URL": s.url,
-                })
+        # ── Summary metrics ───────────────────────────────────────────────────
+        st.subheader("Research Summary")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Sources Found",   len(report.sources))
+        c2.metric("Steps Taken",     report.steps)
+        c3.metric("Est. Reward",     f"{report.total_reward:.2f}")
+        c4.metric("Elapsed",         f"{report.elapsed_sec:.1f}s")
+        avg_cov = round(float(np.mean(list(report.coverage.values()))) if report.coverage else 0, 2)
+        c5.metric("Avg Coverage",    avg_cov)
 
-            df = pd.DataFrame(source_data).sort_values("Combined Score", ascending=False)
-            st.dataframe(df.drop(columns=["URL"]), use_container_width=True, hide_index=True)
+        # ── Agent activation log ──────────────────────────────────────────────
+        st.subheader("🤖 RL Policy — Agent & Tool Decisions")
+        if report.agent_log:
+            log_df = pd.DataFrame(report.agent_log)
+            log_df["Compatible"] = log_df["compatible"].map({True: "✅", False: "❌"})
+            st.dataframe(
+                log_df[["step","agent","tool","Compatible","domain",
+                         "credibility","latency","reward","coverage"]],
+                use_container_width=True, hide_index=True,
+            )
 
-            # Source type breakdown
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             with col1:
-                type_counts = df["Type"].value_counts()
-                fig = px.pie(values=type_counts.values, names=type_counts.index,
-                             title="Source Type Distribution",
-                             color_discrete_sequence=["#3B8BD4", "#1D9E75", "#E8593C"])
+                ac = log_df["agent"].value_counts()
+                fig = px.pie(values=ac.values, names=ac.index,
+                             title="Agent Activation (PPO decisions)",
+                             color_discrete_sequence=["#3B8BD4","#1D9E75","#534AB7","#E8593C"])
                 st.plotly_chart(fig, use_container_width=True)
-
             with col2:
+                tc = log_df["tool"].value_counts()
+                fig = px.bar(x=tc.index, y=tc.values,
+                             title="Tool Selection (Bandit decisions)",
+                             color_discrete_sequence=["#3B8BD4"])
+                fig.update_layout(xaxis_tickangle=-30, height=320)
+                st.plotly_chart(fig, use_container_width=True)
+            with col3:
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(
-                    x=df["Relevance"], y=df["Credibility"],
-                    mode="markers+text",
-                    text=df["Domain"],
-                    textposition="top center",
-                    marker=dict(
-                        size=df["Combined Score"] * 30 + 8,
-                        color=df["Combined Score"],
-                        colorscale="Viridis",
-                        showscale=True,
-                    )
+                    x=log_df["step"], y=log_df["coverage"],
+                    mode="lines+markers", name="Coverage",
+                    line=dict(color="#1D9E75", width=2),
                 ))
-                fig.update_layout(
-                    title="Relevance vs Credibility (size = combined score)",
-                    xaxis_title="Relevance Score",
-                    yaxis_title="Credibility Score",
-                    height=380,
-                )
+                fig.add_trace(go.Scatter(
+                    x=log_df["step"], y=log_df["reward"].cumsum() / log_df["step"],
+                    mode="lines", name="Avg Reward",
+                    line=dict(color="#E8593C", width=2, dash="dot"),
+                ))
+                fig.update_layout(title="Coverage & Reward over Steps",
+                                  xaxis_title="Step", height=320)
                 st.plotly_chart(fig, use_container_width=True)
 
-            # Passage extraction on top source
-            top_source = results["sources"][0]
-            if top_source.snippet:
-                st.subheader("📄 Relevant Passage Extraction (Custom NLP Tool)")
-                st.markdown(f"**Source:** {top_source.title}")
-                passages = extractor.extract(
-                    top_source.snippet * 3,
-                    query, top_k=3
-                )
-                for i, p in enumerate(passages):
-                    st.markdown(f"**Passage {i+1}** (relevance: {p.relevance_score:.3f})")
-                    st.text(p.text[:200])
+        # ── Subtopic coverage ─────────────────────────────────────────────────
+        if report.coverage:
+            st.subheader("📊 Subtopic Coverage (Semantic)")
+            cov_df = pd.DataFrame(list(report.coverage.items()),
+                                  columns=["Subtopic", "Coverage"])
+            fig = px.bar(cov_df, x="Subtopic", y="Coverage",
+                         color="Coverage", color_continuous_scale="Blues",
+                         title="Semantic Coverage per Query Subtopic")
+            fig.update_layout(yaxis_range=[0, 1], height=300)
+            st.plotly_chart(fig, use_container_width=True)
+
+        # ── Sources found ─────────────────────────────────────────────────────
+        if report.sources:
+            st.subheader("📚 Sources Retrieved")
+            src_df = pd.DataFrame(report.sources)
+            src_df = src_df.sort_values("credibility", ascending=False)
+            st.dataframe(
+                src_df[["title","domain","source_type","credibility"]],
+                use_container_width=True, hide_index=True,
+            )
+
+            col1, col2 = st.columns(2)
+            with col1:
+                dt = src_df["source_type"].value_counts()
+                fig = px.pie(values=dt.values, names=dt.index,
+                             title="Source Type Distribution",
+                             color_discrete_sequence=["#3B8BD4","#1D9E75","#E8593C","#534AB7"])
+                st.plotly_chart(fig, use_container_width=True)
+            with col2:
+                dm = src_df["domain"].value_counts()
+                fig = px.bar(x=dm.index, y=dm.values,
+                             title="Domains Retrieved",
+                             color_discrete_sequence=["#534AB7"])
+                fig.update_layout(xaxis_tickangle=-30, height=320)
+                st.plotly_chart(fig, use_container_width=True)
+
+        # ── Key passages (SemanticRelevanceExtractor) ─────────────────────────
+        if report.key_passages:
+            st.subheader("📄 Key Passages — SemanticRelevanceExtractor")
+            st.caption("Extracted using sentence-transformer embeddings (all-MiniLM-L6-v2), "
+                       "not keyword matching — captures meaning-level relevance.")
+            for i, passage in enumerate(report.key_passages[:4], 1):
+                with st.expander(f"Passage {i}"):
+                    st.write(passage[:400])
 
         if show_raw:
-            st.subheader("Raw API Response")
+            st.subheader("Raw Report JSON")
             st.json({
-                "query": results["query"],
-                "total_sources": results["total_sources"],
-                "domains": results["domains"],
-                "sources": [
-                    {"title": s.title, "url": s.url,
-                     "relevance": s.relevance_score, "credibility": s.credibility_score}
-                    for s in results["sources"]
-                ]
+                "query": report.query,
+                "query_type": report.query_type,
+                "steps": report.steps,
+                "total_reward": report.total_reward,
+                "coverage": report.coverage,
+                "agent_log": report.agent_log,
+                "sources": report.sources,
             })
 
 # ── TAB 4: BANDIT ANALYSIS ──
