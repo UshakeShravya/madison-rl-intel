@@ -207,7 +207,8 @@ with tab2:
         config = MadisonConfig()
         env = ResearchEnv(config.environment, config.reward)
         obs_dim = env.observation_space.shape[0]
-        ppo = PPOController(obs_dim, env.action_space.n, config.ppo)
+        # PPO selects agent only (4 actions); bandit selects tool separately
+        ppo = PPOController(obs_dim, env.n_agents, config.ppo)
         bandits = MultiAgentBanditManager(config.bandit, {
             "search": ["web_scraper", "api_client", "academic_search"],
             "evaluator": ["credibility_scorer", "web_scraper"],
@@ -233,7 +234,7 @@ with tab2:
 
         while not done:
             action, log_prob, value = ppo.select_action(obs)
-            agent_idx = action // env.n_tools
+            agent_idx = int(action) % env.n_agents
             agent_name = env.AGENTS[agent_idx].value
             context = obs[:config.bandit.context_dim]
             tool_arm, tool_name = bandits.select_tool(agent_name, context)
