@@ -19,6 +19,11 @@ from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
     HRFlowable, PageBreak, KeepTogether, Preformatted,
 )
+from reportlab.graphics.shapes import (
+    Drawing, Rect, String, Line, Polygon, Group,
+)
+from reportlab.graphics import renderPDF
+from reportlab.graphics.shapes import colors as gcolors
 
 # ── Page geometry ─────────────────────────────────────────────────────────────
 PW, PH    = LETTER           # 612 x 792 points
@@ -474,6 +479,227 @@ def _on_page(canvas, doc):
     canvas.restoreState()
 
 
+# ── Visual Architecture Diagram ───────────────────────────────────────────────
+
+def _hex(h: str):
+    """Convert hex string to reportlab Color."""
+    h = h.lstrip('#')
+    r, g, b = int(h[0:2],16)/255, int(h[2:4],16)/255, int(h[4:6],16)/255
+    from reportlab.lib.colors import Color
+    return Color(r, g, b)
+
+
+def _box(d: Drawing, x, y, w, h, fill_hex, stroke_hex, label_lines,
+         font_size=8, bold=False, label_color='#ffffff', corner=4):
+    """Draw a rounded-corner box with centred multi-line text."""
+    fill   = _hex(fill_hex)
+    stroke = _hex(stroke_hex)
+    font   = 'Helvetica-Bold' if bold else 'Helvetica'
+
+    rect = Rect(x, y, w, h,
+                fillColor=fill, strokeColor=stroke, strokeWidth=1,
+                rx=corner, ry=corner)
+    d.add(rect)
+
+    # Centre text vertically
+    n      = len(label_lines)
+    lh     = font_size * 1.4
+    y_top  = y + h/2 + (n * lh)/2 - lh * 0.75
+    lc     = _hex(label_color)
+    for i, txt in enumerate(label_lines):
+        s = String(x + w/2, y_top - i * lh, txt,
+                   fontName=font, fontSize=font_size,
+                   fillColor=lc, textAnchor='middle')
+        d.add(s)
+
+
+def _arrow(d: Drawing, x1, y1, x2, y2, color='#555555', label='', font_size=7):
+    """Draw a vertical/horizontal arrow with optional label."""
+    c = _hex(color)
+    d.add(Line(x1, y1, x2, y2, strokeColor=c, strokeWidth=1.2))
+    # Arrowhead (small triangle pointing down if y2 < y1)
+    if y2 < y1:  # going down
+        tip = (x2, y2)
+        pts = [tip[0]-4, tip[1]+8, tip[0]+4, tip[1]+8, tip[0], tip[1]]
+        d.add(Polygon(pts, fillColor=c, strokeColor=c, strokeWidth=0))
+    else:  # going up
+        tip = (x2, y2)
+        pts = [tip[0]-4, tip[1]-8, tip[0]+4, tip[1]-8, tip[0], tip[1]]
+        d.add(Polygon(pts, fillColor=c, strokeColor=c, strokeWidth=0))
+    if label:
+        mid_y = (y1 + y2) / 2
+        d.add(String(x1 + 6, mid_y, label,
+                     fontName='Helvetica-Oblique', fontSize=font_size,
+                     fillColor=_hex('#444444'), textAnchor='start'))
+
+
+def _harrow(d: Drawing, x1, y1, x2, label='', font_size=7):
+    """Horizontal arrow left→right."""
+    c = _hex('#555555')
+    d.add(Line(x1, y1, x2, y1, strokeColor=c, strokeWidth=1.0))
+    tip = (x2, y1)
+    pts = [tip[0]-7, tip[1]-3, tip[0]-7, tip[1]+3, tip[0], tip[1]]
+    d.add(Polygon(pts, fillColor=c, strokeColor=c, strokeWidth=0))
+    if label:
+        d.add(String((x1+x2)/2, y1+3, label,
+                     fontName='Helvetica-Oblique', fontSize=font_size,
+                     fillColor=_hex('#444444'), textAnchor='middle'))
+
+
+def build_arch_drawing() -> Drawing:
+    """
+    Build a proper visual architecture flowchart using ReportLab graphics.
+    Shows the full two-level RL hierarchy: PPO -> Agent Selection -> Bandit -> Tools.
+    Fits within CONTENT_W x 520 pts.
+    """
+    W = CONTENT_W   # ~468 pt
+    H = 530.0
+    d = Drawing(W, H)
+
+    # Background
+    d.add(Rect(0, 0, W, H, fillColor=_hex('#f8f9fb'),
+               strokeColor=_hex('#dde3ec'), strokeWidth=0.5))
+
+    # ── Row y-positions (from top = H, so y increases downward in our coords
+    #    but ReportLab y=0 is bottom) ──────────────────────────────────────
+    # We'll place from top:
+    #   row0:  Query input       y = H-60  (box top)
+    #   row1:  PPO controller    y = H-160
+    #   row2:  Agents row        y = H-265
+    #   row3:  Bandit            y = H-370
+    #   row4:  Tools row         y = H-450
+    #   row5:  Env + Reward      y = H-530 (bottom)
+
+    pad = 8   # horizontal padding from edge
+
+    # ── 0. Query input ────────────────────────────────────────────────────
+    qy = H - 55
+    qh = 40
+    qw = W - 2*pad
+    _box(d, pad, qy, qw, qh, '#1a2b4a', '#0f1e35',
+         ['RESEARCH QUERY',
+          '396-dim observation: query_emb(384) | coverage(8) | scalars(4)'],
+         font_size=8, bold=False, label_color='#e8eef6')
+
+    # arrow query -> PPO
+    _arrow(d, W/2, qy, W/2, qy - 22, label='396-dim obs')
+
+    # ── 1. PPO Meta-Controller ────────────────────────────────────────────
+    py = H - 175
+    ph = 80
+    pw = W - 2*pad
+    _box(d, pad, py, pw, ph, '#2d4a7a', '#1a2b4a',
+         ['PPO META-CONTROLLER  (Strategic)',
+          'Shared: Linear(396->256)->ReLU->Linear(256->256)->ReLU',
+          'Policy Head: Linear(256->4) + Softmax     |     Value Head: Linear(256->1)',
+          'PPO-clip objective | GAE advantages | Adam lr=3e-4 | entropy coeff=0.01'],
+         font_size=7.5, bold=False, label_color='#ffffff')
+
+    # arrow PPO -> agents
+    _arrow(d, W/2, py, W/2, py - 22, label='agent_idx in {0,1,2,3}')
+
+    # ── 2. Agent selection (4 boxes) ──────────────────────────────────────
+    ay = H - 295
+    ah = 52
+    aw = (W - 2*pad - 9) / 4   # 4 boxes with 3 gaps of 3pt
+    agent_data = [
+        ('SEARCH', '#3d6fa8', ['web_scraper', 'api_client', 'acad_search']),
+        ('EVALUATOR', '#2d7a5a', ['cred_scorer', 'web_scraper']),
+        ('SYNTHESIS', '#7a4a2d', ['rel_extractor', 'pdf_parser']),
+        ('DEEP DIVE', '#5a2d7a', ['web_scraper', 'api_client', 'rel_extr']),
+    ]
+    ax_positions = []
+    for i, (name, color, tools) in enumerate(agent_data):
+        ax = pad + i * (aw + 3)
+        ax_positions.append(ax + aw/2)
+        _box(d, ax, ay, aw, ah, color, '#1a2b4a',
+             [name, ', '.join(tools[:2]), tools[2] if len(tools)>2 else ''],
+             font_size=6.5, bold=True, label_color='#ffffff')
+
+    # ── 3. Bandit ──────────────────────────────────────────────────────────
+    by_ = H - 390
+    bh  = 58
+    bw  = W - 2*pad
+    # arrow agents -> bandit
+    _arrow(d, W/2, ay, W/2, by_ + bh, label='agent_name')
+
+    _box(d, pad, by_, bw, bh, '#4a3d6f', '#2d1a4a',
+         ['PER-AGENT CONTEXTUAL BANDIT  (Tactical)  -  LinUCB + Novelty Bonus',
+          'score_i = theta_i^T * ctx + alpha * sqrt(ctx^T * A_i^-1 * ctx)  +  beta/sqrt(count+1)',
+          'Context: first 128 dims of obs | Online update: Sherman-Morrison O(d^2)',
+          '4 independent bandits (one per agent) | 6 tool arms each'],
+         font_size=7.0, bold=False, label_color='#e8d8ff')
+
+    # ── 4. Tool boxes ──────────────────────────────────────────────────────
+    ty = H - 470
+    th = 42
+    tw = (W - 2*pad - 5*2) / 6
+    tool_data = [
+        ('web_scraper', '#Wikipedia', '#2a5a8a'),
+        ('api_client', '#OpenAlex', '#2a6a5a'),
+        ('acad_search', '#arXiv', '#6a4a2a'),
+        ('pdf_parser', '#PDF/arXiv', '#5a3a7a'),
+        ('rel_extractor', '#TF-IDF+Sem', '#3a6a4a'),
+        ('cred_scorer', '#5-signal', '#7a4a4a'),
+    ]
+    _arrow(d, W/2, by_, W/2, ty + th, label='tool_idx')
+
+    for i, (name, api, color) in enumerate(tool_data):
+        tx = pad + i * (tw + 2)
+        _box(d, tx, ty, tw, th, color, '#1a2b4a',
+             [name, api],
+             font_size=6.2, bold=False, label_color='#ffffff', corner=3)
+
+    # ── 5. Environment + reward feedback ──────────────────────────────────
+    ey = H - 530
+    eh = 38
+    ew = W - 2*pad
+    _arrow(d, W/2, ty, W/2, ey + eh, label='Real API call')
+
+    _box(d, pad, ey, ew, eh, '#1a4a2a', '#0f2a18',
+         ['RESEARCH ENVIRONMENT  |  Reward: R = 1.0*cred + 0.5*cov - 0.3*lat + 0.4*div',
+          'next_obs -> PPO (feedback loop)  |  Terminal: coverage > 0.9 or budget <= 0'],
+         font_size=7.5, bold=False, label_color='#c8ffc8')
+
+    # Feedback arrow (right side, going back up)
+    fb_x = W - pad - 2
+    d.add(Line(fb_x, ey + eh/2, fb_x, qy + qh/2,
+               strokeColor=_hex('#cc4444'), strokeWidth=1.2,
+               strokeDashArray=[4, 3]))
+    d.add(String(fb_x - 3, (ey + qy)/2 + 15, 'next_obs',
+                 fontName='Helvetica-Oblique', fontSize=6.5,
+                 fillColor=_hex('#cc4444'), textAnchor='end'))
+    # Arrowhead at top
+    tip_y = qy + qh/2
+    pts = [fb_x-4, tip_y-8, fb_x+4, tip_y-8, fb_x, tip_y]
+    d.add(Polygon(pts, fillColor=_hex('#cc4444'),
+                  strokeColor=_hex('#cc4444'), strokeWidth=0))
+
+    return d
+
+
+def arch_drawing_flowable() -> Table:
+    """Wrap the architecture Drawing in a Table so it flows with the story."""
+    drw = build_arch_drawing()
+    from reportlab.platypus import Image
+    import io
+    from reportlab.graphics import renderSVG
+    # Use renderPDF to get the drawing as a flowable directly
+    from reportlab.platypus import Flowable
+
+    class _DrawingFlowable(Flowable):
+        def __init__(self, drawing):
+            Flowable.__init__(self)
+            self._drawing = drawing
+            self.width  = drawing.width
+            self.height = drawing.height
+
+        def draw(self):
+            renderPDF.draw(self._drawing, self.canv, 0, 0)
+
+    return _DrawingFlowable(drw)
+
+
 # ── Title page ────────────────────────────────────────────────────────────────
 
 def build_title_page() -> list:
@@ -534,12 +760,12 @@ def build_title_page() -> list:
     # Key results table (2 columns → 35/65 split)
     kr_rows = [
         ['Metric', 'Result'],
-        ['Full System vs Random Baseline', '+291.3%  (27.48 vs 7.02 mean reward)'],
-        ['Full System vs Heuristic',        '+156.0%'],
-        ['Few-Shot Transfer (K=1)',          '+12.3% over from-scratch training'],
-        ['Early Adaptation (ep 1-10)',       '+17.6% advantage vs from-scratch'],
-        ['Full System wins tight-budget env', '13.26 vs 12.78 (PPO Only)'],
-        ['Experiments',                      '500 episodes x 3 seeds x 5 configurations'],
+        ['Full System vs Random Baseline',   '+268%  (26.60 vs 7.23 mean reward)'],
+        ['Full System vs Heuristic',         '+151%  (26.60 vs 10.60)'],
+        ['Training Mean Reward (Last 50)',    '27.88  |  Peak 37.58  |  5,000 episodes'],
+        ['Transfer Learning Advantage',      '+13.5%  (fine-tune vs from-scratch)'],
+        ['Live Inference (Real APIs)',        'Wikipedia + arXiv + OpenAlex  |  0.57 avg coverage'],
+        ['Experiments',                      '5,000 training episodes + 3-seed ablation x 5 configs'],
         ['Code & Data',                      'github.com/UshakeShravya/madison-rl-intel'],
     ]
     kr_tbl = make_table(kr_rows)
@@ -586,9 +812,38 @@ def build_pdf(output: str = 'docs/technical_report.pdf') -> None:
     )
     body_md = '\n'.join(md_lines[body_start:])
 
-    # Build story
+    # Build story — visual arch diagram goes right after title page
     story: list = []
     story.extend(build_title_page())
+
+    # ── Visual Architecture Diagram (page 2) ──────────────────────────────
+    story.append(Paragraph('System Architecture — Visual Overview', S['h1']))
+    story.append(HRFlowable(width='100%', thickness=2.0, color=ACCENT,
+                             spaceAfter=10, spaceBefore=3))
+    story.append(Paragraph(
+        'The two-level hierarchical control loop: PPO meta-controller selects the agent role; '
+        'per-agent LinUCB contextual bandits select the API tool. '
+        'A dashed red line shows the observation feedback from the environment back to the PPO controller.',
+        S['body'],
+    ))
+    story.append(Spacer(1, 10))
+    story.append(arch_drawing_flowable())
+    story.append(Spacer(1, 12))
+
+    # Key-numbers summary row
+    kn_rows = [
+        ['Component', 'Key Parameters'],
+        ['PPO Controller',   'obs=396-dim | actions=4 | hidden=256 | lr=3e-4 | clip=0.2'],
+        ['Contextual Bandit','LinUCB alpha=1.0 | novelty beta=0.1 | context=128-dim | arms=6'],
+        ['Reward Function',  'R = 1.0*cred + 0.5*cov - 0.3*lat + 0.4*div + 0.6*(rel*cov)'],
+        ['Training',         '5,000 episodes | 20 steps/ep | batch=64 | PPO epochs=4'],
+        ['Live Inference',   'Wikipedia (REST) + OpenAlex + arXiv XML | sentence-transformers'],
+    ]
+    kn_tbl = make_table(kn_rows)
+    if kn_tbl:
+        story.append(kn_tbl)
+    story.append(PageBreak())
+
     story.extend(parse_md(body_md))
 
     out_path = str(repo / output) if not Path(output).is_absolute() else output
